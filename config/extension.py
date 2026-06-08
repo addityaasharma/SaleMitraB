@@ -17,7 +17,12 @@ db = SQLAlchemy()
 socketio = SocketIO(cors_allowed_origins="*", async_mode="gevent")
 migrate = Migrate()
 jwt = JWTManager()
-cors = CORS(resources={r"/*": {"origins": "*"}})
+cors = CORS(resources={r"/*": {
+    "origins": "*",
+    "allow_headers": ["Authorization", "Content-Type"],
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "expose_headers": ["Authorization"]
+}})
 limiter = Limiter(
     key_func=get_remote_address, default_limits=["200 per day", "50 per hour"]
 )
