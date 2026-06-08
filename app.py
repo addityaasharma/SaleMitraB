@@ -1,3 +1,6 @@
+from gevent import monkey
+monkey.patch_all()
+
 from config.extension import *
 from config.settings import BaseConfig
 from flask import Flask
@@ -8,7 +11,7 @@ app.config.from_object(BaseConfig)
 db.init_app(app)
 migrate.init_app(app, db)
 jwt.init_app(app)
-socketio.init_app(app)
+socketio.init_app(app, async_mode="gevent")
 cors.init_app(app)
 limiter.init_app(app)
 
