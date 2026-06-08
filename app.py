@@ -15,7 +15,10 @@ socketio.init_app(app, async_mode="gevent")
 cors.init_app(app)
 limiter.init_app(app)
 
-from routes import *
+from routes.adminRouter import *
+from routes.userRoutes import *
+app.register_blueprint(userBP)
+app.register_blueprint(adminBP)
 
 if __name__ == "__main__":
     socketio.run(app, debug=True)
