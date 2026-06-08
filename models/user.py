@@ -21,7 +21,7 @@ class User(db.Model):
         "Address", backref="user", lazy=True, cascade="all, delete-orphan"
     )
     wishlist = db.relationship(
-        "Wishlist", backref="user", lazy=True, cascade="all, delete-orphan"
+        "WishList", backref="user", lazy=True, cascade="all, delete-orphan"
     )
     cart = db.relationship(
         "Cart", backref="user", lazy=True, cascade="all, delete-orphan"
