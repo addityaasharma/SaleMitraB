@@ -135,6 +135,12 @@ class Products(db.Model):
     product_reviews = db.relationship(
         "ProductReview", backref="products", lazy=True, cascade="all, delete-orphan"
     )
+    collection_products = db.relationship(
+        "CollectionProducts",
+        lazy=True,
+        back_populates="product",
+        cascade="all, delete-orphan",
+    )
 
 
 class ProductReview(db.Model):
@@ -170,4 +176,39 @@ class Banner(db.Model):
         db.DateTime,
         default=db.func.current_timestamp(),
         onupdate=db.func.current_timestamp(),
+    )
+
+
+class Collection(db.Model):
+    __tablename__ = "collection"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False, unique=True)
+    description = db.Column(db.String(255), nullable=True)
+    image = db.Column(db.String(255), nullable=True)
+
+    collection_products = db.relationship(
+        "CollectionProducts",
+        back_populates="collection",
+        cascade="all, delete-orphan",
+        lazy=True,
+    )
+
+
+class CollectionProducts(db.Model):
+    __tablename__ = "collection_products"
+    id = db.Column(db.Integer, primary_key=True)
+    product_id = db.Column(
+        db.Integer, db.ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+    )
+    collection_id = db.Column(
+        db.Integer, db.ForeignKey("collection.id", ondelete="CASCADE"), nullable=False
+    )
+    collection = db.relationship("Collection", back_populates="collection_products")
+    product = db.relationship(
+        "Products", back_populates="collection_products"
+    )  # singular, no uselist
+    __table_args__ = (
+        db.UniqueConstraint(
+            "product_id", "collection_id", name="uq_product_collection"
+        ),
     )

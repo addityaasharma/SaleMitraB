@@ -9,14 +9,12 @@ import redis, os, resend, boto3
 from dotenv import load_dotenv
 from celery import Celery
 import razorpay
-import hmac
-import hashlib
-import uuid
+
 
 load_dotenv()
 
 db = SQLAlchemy()
-socketio = SocketIO()
+socketio = SocketIO(cors_allowed_origins="*", async_mode="gevent")
 migrate = Migrate()
 jwt = JWTManager()
 cors = CORS(resources={r"/*": {"origins": "*"}})

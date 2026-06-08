@@ -3980,3 +3980,222 @@ def get_dashboard():
             ),
             500,
         )
+
+
+
+@adminBP.route("/collection", methods=["POST"])
+@admin_middleware
+def create_collection():
+    try:
+        name = request.form.get("name", "").strip()
+        description = request.form.get("description", "").strip()
+        product_ids = request.form.getlist("product_ids")  # list of int strings
+
+        if not name:
+            return jsonify({"status": "error", "message": "Name is required"}), 400
+
+        if Collection.query.filter_by(name=name).first():
+            return jsonify({"status": "error", "message": "Collection name already exists"}), 409
+
+        image_url = None
+        if "image" in request.files:
+            image_url = upload_file(request.files["image"], folder="collections")
+
+        collection = Collection(name=name, description=description, image=image_url)
+        db.session.add(collection)
+        db.session.flush()  # get collection.id before commit
+
+        added_products = []
+        skipped_products = []
+
+        for pid in product_ids:
+            try:
+                pid = int(pid)
+            except ValueError:
+                skipped_products.append({"id": pid, "reason": "Invalid ID"})
+                continue
+
+            product = Products.query.get(pid)
+            if not product:
+                skipped_products.append({"id": pid, "reason": "Product not found"})
+                continue
+
+            cp = CollectionProducts(product_id=pid, collection_id=collection.id)
+            db.session.add(cp)
+            added_products.append(pid)
+
+        db.session.commit()
+        return jsonify({
+            "status": "success",
+            "message": "Collection created",
+            "collection_id": collection.id,
+            "added_products": added_products,
+            "skipped_products": skipped_products,
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": "Failed to create collection", "error": str(e)}), 500
+
+
+@adminBP.route("/collection", methods=["GET"])
+@admin_middleware
+def get_collections():
+    try:
+        collections = Collection.query.all()
+        result = []
+        for c in collections:
+            result.append({
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "image": c.image,
+                "product_count": len(c.collection_products),
+                "products": [
+                    {
+                        "id": cp.product.id,
+                        "name": cp.product.name,
+                        "product_image": cp.product.product_image,
+                        "price": cp.product.price,
+                        "status": cp.product.status,
+                    }
+                    for cp in c.collection_products
+                ],
+            })
+        return jsonify({"status": "success", "collections": result}), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": "Failed to fetch collections", "error": str(e)}), 500
+
+
+@adminBP.route("/collection/<int:collection_id>", methods=["GET"])
+@admin_middleware
+def get_collection(collection_id):
+    try:
+        c = Collection.query.get(collection_id)
+        if not c:
+            return jsonify({"status": "error", "message": "Collection not found"}), 404
+
+        return jsonify({
+            "status": "success",
+            "collection": {
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "image": c.image,
+                "product_count": len(c.collection_products),
+                "products": [
+                    {
+                        "id": cp.product.id,
+                        "name": cp.product.name,
+                        "product_image": cp.product.product_image,
+                        "price": cp.product.price,
+                        "compare_at_price": cp.product.compare_at_price,
+                        "stock": cp.product.stock,
+                        "status": cp.product.status,
+                        "sku": cp.product.sku,
+                    }
+                    for cp in c.collection_products
+                ],
+            }
+        }), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": "Failed to fetch collection", "error": str(e)}), 500
+
+
+@adminBP.route("/collection/<int:collection_id>", methods=["PUT"])
+@admin_middleware
+def edit_collection(collection_id):
+    try:
+        c = Collection.query.get(collection_id)
+        if not c:
+            return jsonify({"status": "error", "message": "Collection not found"}), 404
+
+        name = request.form.get("name", "").strip()
+        description = request.form.get("description", "").strip()
+        add_product_ids = request.form.getlist("add_product_ids")      # products to add
+        remove_product_ids = request.form.getlist("remove_product_ids")  # products to remove
+
+        if name:
+            existing = Collection.query.filter(Collection.name == name, Collection.id != collection_id).first()
+            if existing:
+                return jsonify({"status": "error", "message": "Collection name already exists"}), 409
+            c.name = name
+
+        if description:
+            c.description = description
+
+        if "image" in request.files:
+            c.image = upload_file(request.files["image"], folder="collections")
+
+        removed = []
+        skipped_remove = []
+        for pid in remove_product_ids:
+            try:
+                pid = int(pid)
+            except ValueError:
+                skipped_remove.append({"id": pid, "reason": "Invalid ID"})
+                continue
+
+            cp = CollectionProducts.query.filter_by(product_id=pid, collection_id=collection_id).first()
+            if not cp:
+                skipped_remove.append({"id": pid, "reason": "Not in collection"})
+                continue
+
+            db.session.delete(cp)
+            removed.append(pid)
+
+        added = []
+        skipped_add = []
+        for pid in add_product_ids:
+            try:
+                pid = int(pid)
+            except ValueError:
+                skipped_add.append({"id": pid, "reason": "Invalid ID"})
+                continue
+
+            if not Products.query.get(pid):
+                skipped_add.append({"id": pid, "reason": "Product not found"})
+                continue
+
+            already_exists = CollectionProducts.query.filter_by(product_id=pid, collection_id=collection_id).first()
+            if already_exists:
+                skipped_add.append({"id": pid, "reason": "Already in collection"})
+                continue
+
+            db.session.add(CollectionProducts(product_id=pid, collection_id=collection_id))
+            added.append(pid)
+
+        db.session.commit()
+        return jsonify({
+            "status": "success",
+            "message": "Collection updated",
+            "added": added,
+            "removed": removed,
+            "skipped_add": skipped_add,
+            "skipped_remove": skipped_remove,
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": "Failed to update collection", "error": str(e)}), 500
+
+
+@adminBP.route("/collection/<int:collection_id>", methods=["DELETE"])
+@admin_middleware
+def delete_collection(collection_id):
+    try:
+        c = Collection.query.get(collection_id)
+        if not c:
+            return jsonify({"status": "error", "message": "Collection not found"}), 404
+
+        db.session.delete(c)
+        db.session.commit()
+        return jsonify({"status": "success", "message": "Collection deleted"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": "Failed to delete collection", "error": str(e)}), 500
+    
+    

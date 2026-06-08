@@ -2786,3 +2786,97 @@ def get_store():
             ),
             500,
         )
+
+
+@userBP.route("/collections", methods=["GET"])
+def get_collections():
+    try:
+        collections = Collection.query.all()
+        result = []
+        for c in collections:
+            result.append({
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "image": c.image,
+                "product_count": len(c.collection_products),
+            })
+        return jsonify({"status": "success", "collections": result}), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": "Failed to fetch collections", "error": str(e)}), 500
+
+
+@userBP.route("/collections/<int:collection_id>", methods=["GET"])
+def get_collection(collection_id):
+    try:
+        c = Collection.query.get(collection_id)
+        if not c:
+            return jsonify({"status": "error", "message": "Collection not found"}), 404
+
+        page = request.args.get("page", 1, type=int)
+        limit = request.args.get("limit", 20, type=int)
+        sort_by = request.args.get("sort_by", "created_at")   # created_at | price | name
+        order = request.args.get("order", "desc")              # asc | desc
+
+        valid_sort_fields = {
+            "created_at": Products.created_at,
+            "price": Products.price,
+            "name": Products.name,
+        }
+        sort_col = valid_sort_fields.get(sort_by, Products.created_at)
+        sort_dir = sort_col.desc() if order == "desc" else sort_col.asc()
+
+        query = (
+            Products.query
+            .join(CollectionProducts, CollectionProducts.product_id == Products.id)
+            .filter(
+                CollectionProducts.collection_id == collection_id,
+                Products.status == "active",
+            )
+            .order_by(sort_dir)
+        )
+
+        paginated = query.paginate(page=page, per_page=limit, error_out=False)
+
+        products = []
+        for p in paginated.items:
+            products.append({
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "product_image": p.product_image,
+                "product_images": p.product_images,
+                "price": p.price,
+                "compare_at_price": p.compare_at_price,
+                "sizes": p.sizes,
+                "colors": p.colors,
+                "stock": p.stock,
+                "quantity": p.quantity,
+                "status": p.status,
+                "sell_when_out_of_stock": p.sell_when_out_of_stock,
+                "sku": p.sku,
+                "category_id": p.category_id,
+            })
+
+        return jsonify({
+            "status": "success",
+            "collection": {
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "image": c.image,
+            },
+            "products": products,
+            "pagination": {
+                "page": paginated.page,
+                "limit": limit,
+                "total_products": paginated.total,
+                "total_pages": paginated.pages,
+                "has_next": paginated.has_next,
+                "has_prev": paginated.has_prev,
+            },
+        }), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": "Failed to fetch collection", "error": str(e)}), 500
