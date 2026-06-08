@@ -1,4 +1,5 @@
 from gevent import monkey
+
 monkey.patch_all()
 
 from config.extension import *
@@ -17,8 +18,12 @@ limiter.init_app(app)
 
 from routes.adminRouter import *
 from routes.userRoutes import *
+
 app.register_blueprint(userBP)
 app.register_blueprint(adminBP)
+
+with app.app_context():
+    db.create_all()
 
 if __name__ == "__main__":
     socketio.run(app, debug=True)
