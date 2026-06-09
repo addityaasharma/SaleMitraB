@@ -210,6 +210,10 @@ def update_admin():
         )
 
 
+# ---------------------- product section ------------------------------------------
+
+
+
 @adminBP.route("/product", methods=["POST"])
 @admin_middleware
 def create_product():
@@ -817,6 +821,9 @@ def delete_products():
             ),
             500,
         )
+
+
+# ---------------------- category section ------------------------------------------
 
 
 @adminBP.route("/category", methods=["POST"])
@@ -2218,6 +2225,8 @@ def bulk_update_orders():
             500,
         )
 
+
+# ----------------------- banner -----------------------------------
 
 @adminBP.route("/banner", methods=["POST"])
 @admin_middleware
