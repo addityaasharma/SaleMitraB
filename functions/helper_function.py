@@ -105,3 +105,17 @@ def generate_order_id():
     date_str = datetime.now().strftime("%Y%m%d")
     unique = str(uuid.uuid4()).split("-")[0].upper()
     return f"ORD-{date_str}-{unique}"
+
+
+def to_bool(val, default=False):
+    if isinstance(val, bool): return val
+    if isinstance(val, str): return val.lower() == 'true'
+    return default
+
+def to_float(val, default=None):
+    try: return float(val) if val not in (None, '') else default
+    except (ValueError, TypeError): return default
+
+def to_int(val, default=None):
+    try: return int(val) if val not in (None, '') else default
+    except (ValueError, TypeError): return default

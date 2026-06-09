@@ -14,19 +14,6 @@ load_dotenv()
 
 adminBP = Blueprint("admin", __name__, url_prefix="/admin")
 
-def to_bool(val, default=False):
-    if isinstance(val, bool): return val
-    if isinstance(val, str): return val.lower() == 'true'
-    return default
-
-def to_float(val, default=None):
-    try: return float(val) if val not in (None, '') else default
-    except (ValueError, TypeError): return default
-
-def to_int(val, default=None):
-    try: return int(val) if val not in (None, '') else default
-    except (ValueError, TypeError): return default
-
 @adminBP.route("/signup", methods=["POST"])
 def signup():
     data = request.get_json()
@@ -1312,15 +1299,7 @@ def update_category(category_id):
                     Category.name == data["name"], Category.id != category_id
                 ).first()
                 if existing:
-                    return (
-                        jsonify(
-                            {
-                                "status": "error",
-                                "message": "Category name already exists",
-                            }
-                        ),
-                        409,
-                    )
+                    return jsonify({"status": "error", "message": "Category name already exists"}), 409
                 category.name = data["name"]
 
             if "slug" in data:
@@ -1328,15 +1307,7 @@ def update_category(category_id):
                     Category.slug == data["slug"], Category.id != category_id
                 ).first()
                 if existing:
-                    return (
-                        jsonify(
-                            {
-                                "status": "error",
-                                "message": "Category slug already exists",
-                            }
-                        ),
-                        409,
-                    )
+                    return jsonify({"status": "error", "message": "Category slug already exists"}), 409
                 category.slug = data["slug"]
 
             if "description" in data:
@@ -1352,15 +1323,7 @@ def update_category(category_id):
                     Category.name == data["name"], Category.id != category_id
                 ).first()
                 if existing:
-                    return (
-                        jsonify(
-                            {
-                                "status": "error",
-                                "message": "Category name already exists",
-                            }
-                        ),
-                        409,
-                    )
+                    return jsonify({"status": "error", "message": "Category name already exists"}), 409
                 category.name = data["name"]
 
             if "slug" in data:
@@ -1368,15 +1331,7 @@ def update_category(category_id):
                     Category.slug == data["slug"], Category.id != category_id
                 ).first()
                 if existing:
-                    return (
-                        jsonify(
-                            {
-                                "status": "error",
-                                "message": "Category slug already exists",
-                            }
-                        ),
-                        409,
-                    )
+                    return jsonify({"status": "error", "message": "Category slug already exists"}), 409
                 category.slug = data["slug"]
 
             if "description" in data:
@@ -1386,24 +1341,49 @@ def update_category(category_id):
             if "icon" in data:
                 category.icon = data["icon"]
 
+            # --- add products to category ---
+            if "add_product_ids" in data:
+                add_ids = data["add_product_ids"]
+                if not isinstance(add_ids, list):
+                    return jsonify({"status": "error", "message": "add_product_ids must be a list"}), 400
+
+                products_to_add = Products.query.filter(Products.id.in_(add_ids)).all()
+                if len(products_to_add) != len(add_ids):
+                    found_ids = {p.id for p in products_to_add}
+                    missing = [i for i in add_ids if i not in found_ids]
+                    return jsonify({"status": "error", "message": f"Products not found: {missing}"}), 404
+
+                for product in products_to_add:
+                    product.category_id = category_id
+
+            # --- remove products from category ---
+            if "remove_product_ids" in data:
+                remove_ids = data["remove_product_ids"]
+                if not isinstance(remove_ids, list):
+                    return jsonify({"status": "error", "message": "remove_product_ids must be a list"}), 400
+
+                products_to_remove = Products.query.filter(
+                    Products.id.in_(remove_ids),
+                    Products.category_id == category_id
+                ).all()
+                if len(products_to_remove) != len(remove_ids):
+                    found_ids = {p.id for p in products_to_remove}
+                    missing = [i for i in remove_ids if i not in found_ids]
+                    return jsonify({"status": "error", "message": f"Products not found in this category: {missing}"}), 404
+
+                for product in products_to_remove:
+                    product.category_id = None
+
         db.session.commit()
-        return (
-            jsonify({"status": "success", "message": "Category updated successfully"}),
-            200,
-        )
+        return jsonify({"status": "success", "message": "Category updated successfully"}), 200
 
     except Exception as e:
         db.session.rollback()
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "message": "Failed to update category",
-                    "error": str(e),
-                }
-            ),
-            500,
-        )
+        return jsonify({
+            "status": "error",
+            "message": "Failed to update category",
+            "error": str(e),
+        }), 500
 
 
 @adminBP.route("/category", methods=["DELETE"])
