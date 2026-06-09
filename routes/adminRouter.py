@@ -232,7 +232,6 @@ def create_product():
             except (ValueError, TypeError): return default
 
         if "application/json" in content_type:
-            # bulk upload via JSON (no images)
             data = request.get_json()
             products_data = data if isinstance(data, list) else [data]
 
@@ -281,7 +280,6 @@ def create_product():
             }), 201
 
         else:
-            # single product with image upload via multipart/form-data
             data = request.form
 
             existing = Products.query.filter_by(sku=data.get("sku")).first()
@@ -297,29 +295,52 @@ def create_product():
             additional_files = request.files.getlist("product_images")
             product_images_urls = upload_file(additional_files, folder="products") if additional_files else []
 
+            # --- type coercions ---
+            category_id = to_int(data.get("category_id"))
+            price       = to_float(data.get("price"))
+            compare_at  = to_float(data.get("compare_at_price"))
+            stock       = to_int(data.get("stock"))
+            unit_price  = to_float(data.get("unit_price"))
+            charge_tax  = to_bool(data.get("charge_tax"))
+            tax_rate    = to_float(data.get("tax_rate"), default=0.0)
+            cost_price  = to_float(data.get("cost_price"))
+            weight      = to_float(data.get("weight"))
+            quantity    = to_int(data.get("quantity"))
+            sell_oos    = to_bool(data.get("sell_when_out_of_stock"))
+
+            # --- DB-level constraint checklist ---
+            if category_id is None:
+                return jsonify({"status": "error", "message": "Category is required"}), 400
+            if price is None:
+                return jsonify({"status": "error", "message": "Price is required"}), 400
+            if stock is None:
+                return jsonify({"status": "error", "message": "Stock is required"}), 400
+            if quantity is None:
+                return jsonify({"status": "error", "message": "Quantity is required"}), 400
+
             product = Products(
-                category_id=to_int(data.get("category_id")),
+                category_id=category_id,
                 name=data.get("name"),
                 description=data.get("description"),
                 product_image=product_image_url,
                 product_images=product_images_urls,
                 sizes=json.loads(data.get("sizes", "[]")),
                 colors=json.loads(data.get("colors", "[]")),
-                price=to_float(data.get("price")),
-                compare_at_price=to_float(data.get("compare_at_price")),
-                stock=to_int(data.get("stock")),
-                unit_price=to_float(data.get("unit_price")),
-                charge_tax=to_bool(data.get("charge_tax")),
-                tax_rate=to_float(data.get("tax_rate"), default=0.0),
-                cost_price=to_float(data.get("cost_price")),
+                price=price,
+                compare_at_price=compare_at,
+                stock=stock,
+                unit_price=unit_price,
+                charge_tax=charge_tax,
+                tax_rate=tax_rate,
+                cost_price=cost_price,
                 sku=data.get("sku"),
                 barcode=data.get("barcode"),
                 country_of_origin=data.get("country_of_origin"),
-                weight=to_float(data.get("weight")),
+                weight=weight,
                 weight_unit=data.get("weight_unit"),
                 product_type=data.get("product_type"),
-                sell_when_out_of_stock=to_bool(data.get("sell_when_out_of_stock")),
-                quantity=to_int(data.get("quantity")),
+                sell_when_out_of_stock=sell_oos,
+                quantity=quantity,
                 status=data.get("status", "active"),
             )
             db.session.add(product)
