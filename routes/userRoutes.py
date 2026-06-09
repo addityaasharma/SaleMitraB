@@ -2016,11 +2016,12 @@ def cancel_refund_request(order_id):
 def get_products():
     try:
         page = request.args.get("page", 1, type=int)
-        per_page = request.args.get("per_page", 12, type=int)
-        per_page = min(per_page, 100)
+        per_page = min(request.args.get("per_page", 12, type=int), 100)
+
         query = Products.query
         status = request.args.get("status", "active")
         query = query.filter(Products.status == status)
+
         search = request.args.get("search")
         if search:
             query = query.filter(Products.name.ilike(f"%{search}%"))
@@ -2076,22 +2077,92 @@ def get_products():
         if barcode:
             query = query.filter(Products.barcode == barcode)
 
+        # ── Special filters ───────────────────────────────────────────────────
+        special = request.args.get(
+            "filter"
+        )  # trending | new_arrivals | best_sellers | top_picks
+
         sort_by = request.args.get("sort_by", "created_at")
         sort_order = request.args.get("sort_order", "desc")
 
-        allowed_sort_fields = {
-            "name": Products.name,
-            "price": Products.price,
-            "created_at": Products.created_at,
-            "stock": Products.stock,
-            "weight": Products.weight,
-        }
+        if special == "new_arrivals":
+            # newest products — last 30 days
+            from datetime import timedelta
 
-        sort_column = allowed_sort_fields.get(sort_by, Products.created_at)
-        if sort_order == "asc":
-            query = query.order_by(sort_column.asc())
+            cutoff = datetime.utcnow() - timedelta(days=30)
+            query = query.filter(Products.created_at >= cutoff)
+            query = query.order_by(Products.created_at.desc())
+
+        elif special == "trending":
+            # most ordered products in last 7 days
+            from datetime import timedelta
+            from sqlalchemy import func
+
+            cutoff = datetime.utcnow() - timedelta(days=7)
+            trending_ids = (
+                db.session.query(OrderedItems.product_id)
+                .join(Orders, OrderedItems.order_id == Orders.id)
+                .filter(Orders.created_at >= cutoff)
+                .filter(Orders.status != "cancelled")
+                .group_by(OrderedItems.product_id)
+                .order_by(func.sum(OrderedItems.quantity).desc())
+                .limit(50)
+                .subquery()
+            )
+            query = query.filter(
+                Products.id.in_(db.session.query(trending_ids.c.product_id))
+            )
+            # preserve trending order
+            query = query.order_by(Products.created_at.desc())
+
+        elif special == "best_sellers":
+            # all-time most ordered products
+            from sqlalchemy import func
+
+            best_ids = (
+                db.session.query(OrderedItems.product_id)
+                .join(Orders, OrderedItems.order_id == Orders.id)
+                .filter(Orders.status != "cancelled")
+                .group_by(OrderedItems.product_id)
+                .order_by(func.sum(OrderedItems.quantity).desc())
+                .limit(50)
+                .subquery()
+            )
+            query = query.filter(
+                Products.id.in_(db.session.query(best_ids.c.product_id))
+            )
+            query = query.order_by(Products.created_at.desc())
+
+        elif special == "top_picks":
+            # highest rated products with at least 1 review
+            from sqlalchemy import func
+
+            rated_ids = (
+                db.session.query(ProductReview.product_id)
+                .group_by(ProductReview.product_id)
+                .having(func.count(ProductReview.id) >= 1)
+                .order_by(func.avg(ProductReview.rating).desc())
+                .limit(50)
+                .subquery()
+            )
+            query = query.filter(
+                Products.id.in_(db.session.query(rated_ids.c.product_id))
+            )
+            query = query.order_by(Products.created_at.desc())
+
         else:
-            query = query.order_by(sort_column.desc())
+            # normal sort
+            allowed_sort_fields = {
+                "name": Products.name,
+                "price": Products.price,
+                "created_at": Products.created_at,
+                "stock": Products.stock,
+                "weight": Products.weight,
+            }
+            sort_column = allowed_sort_fields.get(sort_by, Products.created_at)
+            query = query.order_by(
+                sort_column.asc() if sort_order == "asc" else sort_column.desc()
+            )
 
         products = query.paginate(page=page, per_page=per_page, error_out=False)
 
@@ -2104,9 +2175,11 @@ def get_products():
                 discount_percentage = round((discount / product.compare_at_price) * 100)
 
             reviews = product.product_reviews
-            avg_rating = 0
-            if reviews:
-                avg_rating = round(sum(r.rating for r in reviews) / len(reviews), 1)
+            avg_rating = (
+                round(sum(r.rating for r in reviews) / len(reviews), 1)
+                if reviews
+                else 0
+            )
 
             products_data.append(
                 {
@@ -2167,6 +2240,7 @@ def get_products():
                         "barcode": barcode,
                         "sort_by": sort_by,
                         "sort_order": sort_order,
+                        "filter": special,
                     },
                     "data": products_data,
                 }
@@ -2177,7 +2251,11 @@ def get_products():
     except Exception as e:
         return (
             jsonify(
-                {"status": "error", "message": "Internal server error", "error": str(e)}
+                {
+                    "status": "error",
+                    "message": "Internal server error",
+                    "error": str(e),
+                }
             ),
             500,
         )
