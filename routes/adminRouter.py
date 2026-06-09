@@ -215,8 +215,21 @@ def update_admin():
 @admin_middleware
 def create_product():
     try:
-        # check if bulk or single
         content_type = request.content_type or ""
+
+        # --- helpers ---
+        def to_bool(val, default=False):
+            if isinstance(val, bool): return val
+            if isinstance(val, str): return val.lower() == 'true'
+            return default
+
+        def to_float(val, default=None):
+            try: return float(val) if val not in (None, '') else default
+            except (ValueError, TypeError): return default
+
+        def to_int(val, default=None):
+            try: return int(val) if val not in (None, '') else default
+            except (ValueError, TypeError): return default
 
         if "application/json" in content_type:
             # bulk upload via JSON (no images)
@@ -224,29 +237,13 @@ def create_product():
             products_data = data if isinstance(data, list) else [data]
 
             if len(products_data) > 10:
-                return (
-                    jsonify(
-                        {
-                            "status": "error",
-                            "message": "Maximum 10 products allowed at once",
-                        }
-                    ),
-                    400,
-                )
+                return jsonify({"status": "error", "message": "Maximum 10 products allowed at once"}), 400
 
             created = []
             for item in products_data:
                 existing = Products.query.filter_by(sku=item.get("sku")).first()
                 if existing:
-                    return (
-                        jsonify(
-                            {
-                                "status": "error",
-                                "message": f"SKU {item.get('sku')} already exists",
-                            }
-                        ),
-                        409,
-                    )
+                    return jsonify({"status": "error", "message": f"SKU {item.get('sku')} already exists"}), 409
 
                 product = Products(
                     category_id=item.get("category_id"),
@@ -277,16 +274,11 @@ def create_product():
                 created.append(product)
 
             db.session.commit()
-            return (
-                jsonify(
-                    {
-                        "status": "success",
-                        "message": f"{len(created)} product(s) created successfully",
-                        "ids": [p.id for p in created],
-                    }
-                ),
-                201,
-            )
+            return jsonify({
+                "status": "success",
+                "message": f"{len(created)} product(s) created successfully",
+                "ids": [p.id for p in created],
+            }), 201
 
         else:
             # single product with image upload via multipart/form-data
@@ -294,81 +286,58 @@ def create_product():
 
             existing = Products.query.filter_by(sku=data.get("sku")).first()
             if existing:
-                return (
-                    jsonify({"status": "error", "message": "SKU already exists"}),
-                    409,
-                )
+                return jsonify({"status": "error", "message": "SKU already exists"}), 409
 
-            # single main image (required)
             main_image_file = request.files.get("product_image")
             if not main_image_file:
-                return (
-                    jsonify(
-                        {"status": "error", "message": "product_image is required"}
-                    ),
-                    400,
-                )
+                return jsonify({"status": "error", "message": "product_image is required"}), 400
+
             product_image_url = upload_file(main_image_file, folder="products")
 
-            # multiple additional images (optional, max 10)
             additional_files = request.files.getlist("product_images")
-            product_images_urls = (
-                upload_file(additional_files, folder="products")
-                if additional_files
-                else []
-            )
+            product_images_urls = upload_file(additional_files, folder="products") if additional_files else []
 
             product = Products(
-                category_id=data.get("category_id"),
+                category_id=to_int(data.get("category_id")),
                 name=data.get("name"),
                 description=data.get("description"),
                 product_image=product_image_url,
                 product_images=product_images_urls,
                 sizes=json.loads(data.get("sizes", "[]")),
                 colors=json.loads(data.get("colors", "[]")),
-                price=data.get("price"),
-                compare_at_price=data.get("compare_at_price"),
-                stock=data.get("stock"),
-                unit_price=data.get("unit_price"),
-                charge_tax=data.get("charge_tax", False),
-                tax_rate=data.get("tax_rate"),
-                cost_price=data.get("cost_price"),
+                price=to_float(data.get("price")),
+                compare_at_price=to_float(data.get("compare_at_price")),
+                stock=to_int(data.get("stock")),
+                unit_price=to_float(data.get("unit_price")),
+                charge_tax=to_bool(data.get("charge_tax")),
+                tax_rate=to_float(data.get("tax_rate"), default=0.0),
+                cost_price=to_float(data.get("cost_price")),
                 sku=data.get("sku"),
                 barcode=data.get("barcode"),
                 country_of_origin=data.get("country_of_origin"),
-                weight=data.get("weight"),
+                weight=to_float(data.get("weight")),
                 weight_unit=data.get("weight_unit"),
                 product_type=data.get("product_type"),
-                sell_when_out_of_stock=data.get("sell_when_out_of_stock", False),
-                quantity=data.get("quantity"),
+                sell_when_out_of_stock=to_bool(data.get("sell_when_out_of_stock")),
+                quantity=to_int(data.get("quantity")),
                 status=data.get("status", "active"),
             )
             db.session.add(product)
             db.session.commit()
 
-            return (
-                jsonify(
-                    {
-                        "status": "success",
-                        "message": "Product created successfully",
-                        "id": product.id,
-                    }
-                ),
-                201,
-            )
+            return jsonify({
+                "status": "success",
+                "message": "Product created successfully",
+                "id": product.id,
+            }), 201
 
     except Exception as e:
         db.session.rollback()
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "message": "Failed to create product",
-                    "error": str(e),
-                }
-            ),
-            500,
-        )
+        return jsonify({
+            "status": "error",
+            "message": "Failed to create product",
+            "error": str(e),
+        }), 500
         
 
 @adminBP.route("/product/<int:product_id>", methods=["GET"])
