@@ -2880,3 +2880,85 @@ def get_collection(collection_id):
 
     except Exception as e:
         return jsonify({"status": "error", "message": "Failed to fetch collection", "error": str(e)}), 500
+    
+    
+@userBP.route("/search", methods=["GET"])
+def search_products():
+    try:
+        search_query = request.args.get("q", "").strip()
+        page = request.args.get("page", 1, type=int)
+        limit = request.args.get("limit", 20, type=int)
+        category_id = request.args.get("category_id", type=int)
+        min_price = request.args.get("min_price", type=float)
+        max_price = request.args.get("max_price", type=float)
+        sort_by = request.args.get("sort_by", "created_at")
+        sort_order = request.args.get("sort_order", "desc")
+
+        allowed_sort_fields = ["created_at", "price", "name"]
+        if sort_by not in allowed_sort_fields:
+            return jsonify({
+                "status": "error",
+                "message": f"Invalid sort_by. Allowed: {', '.join(allowed_sort_fields)}"
+            }), 400
+
+        stmt = Products.query.filter(Products.status == "active")
+
+        if search_query:
+            stmt = stmt.filter(
+                db.or_(
+                    Products.name.ilike(f"%{search_query}%"),
+                    Products.description.ilike(f"%{search_query}%"),
+                    Products.sku.ilike(f"%{search_query}%"),
+                    Products.product_type.ilike(f"%{search_query}%"),
+                )
+            )
+
+        if category_id:
+            stmt = stmt.filter(Products.category_id == category_id)
+
+        if min_price is not None:
+            stmt = stmt.filter(Products.price >= min_price)
+
+        if max_price is not None:
+            stmt = stmt.filter(Products.price <= max_price)
+
+        sort_column = getattr(Products, sort_by)
+        stmt = stmt.order_by(sort_column.desc() if sort_order == "desc" else sort_column.asc())
+
+        pagination = stmt.paginate(page=page, per_page=limit, error_out=False)
+
+        products = [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "product_image": p.product_image,
+                "price": p.price,
+                "compare_at_price": p.compare_at_price,
+                "stock": p.stock,
+                "sku": p.sku,
+                "sizes": p.sizes,
+                "colors": p.colors,
+                "status": p.status,
+                "category_id": p.category_id,
+                "category_name": p.category.name if p.category else None,
+            }
+            for p in pagination.items
+        ]
+
+        return jsonify({
+            "status": "success",
+            "query": search_query,
+            "products": products,
+            "total": pagination.total,
+            "pages": pagination.pages,
+            "page": page,
+            "limit": limit,
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": "Search failed",
+            "error": str(e),
+        }), 500
