@@ -14,6 +14,18 @@ load_dotenv()
 
 adminBP = Blueprint("admin", __name__, url_prefix="/admin")
 
+def to_bool(val, default=False):
+    if isinstance(val, bool): return val
+    if isinstance(val, str): return val.lower() == 'true'
+    return default
+
+def to_float(val, default=None):
+    try: return float(val) if val not in (None, '') else default
+    except (ValueError, TypeError): return default
+
+def to_int(val, default=None):
+    try: return int(val) if val not in (None, '') else default
+    except (ValueError, TypeError): return default
 
 @adminBP.route("/signup", methods=["POST"])
 def signup():
@@ -620,20 +632,49 @@ def update_product(product_id):
             data = request.form
 
             if "product_image" in request.files:
-                product.product_image = upload_file(
-                    request.files["product_image"], folder="products"
-                )
+                product.product_image = upload_file(request.files["product_image"], folder="products")
 
             additional_files = request.files.getlist("product_images")
             if additional_files:
-                product.product_images = upload_file(
-                    additional_files, folder="products"
-                )
+                product.product_images = upload_file(additional_files, folder="products")
 
             if "sizes" in data:
                 product.sizes = json.loads(data.get("sizes"))
             if "colors" in data:
                 product.colors = json.loads(data.get("colors"))
+
+            coerce_map = {
+                "category_id":            lambda v: to_int(v),
+                "price":                  lambda v: to_float(v),
+                "compare_at_price":       lambda v: to_float(v),
+                "stock":                  lambda v: to_int(v),
+                "unit_price":             lambda v: to_float(v),
+                "charge_tax":             lambda v: to_bool(v),
+                "tax_rate":               lambda v: to_float(v, default=0.0),
+                "cost_price":             lambda v: to_float(v),
+                "weight":                 lambda v: to_float(v),
+                "quantity":               lambda v: to_int(v),
+                "sell_when_out_of_stock": lambda v: to_bool(v),
+            }
+
+            fields = [
+                "name", "description", "category_id", "price", "compare_at_price",
+                "stock", "unit_price", "charge_tax", "tax_rate", "cost_price",
+                "barcode", "country_of_origin", "weight", "weight_unit",
+                "product_type", "sell_when_out_of_stock", "quantity", "status",
+            ]
+            for field in fields:
+                value = data.get(field)
+                if value is not None:
+                    coerced = coerce_map[field](value) if field in coerce_map else value
+                    setattr(product, field, coerced)
+
+            if "sku" in data:
+                existing = Products.query.filter_by(sku=data["sku"]).first()
+                if existing and existing.id != product_id:
+                    return jsonify({"status": "error", "message": "SKU already exists"}), 409
+                product.sku = data["sku"]
+
         else:
             data = request.get_json()
 
@@ -646,59 +687,33 @@ def update_product(product_id):
             if "product_images" in data:
                 product.product_images = data["product_images"]
 
-        # common fields
-        fields = [
-            "name",
-            "description",
-            "category_id",
-            "price",
-            "compare_at_price",
-            "stock",
-            "unit_price",
-            "charge_tax",
-            "tax_rate",
-            "cost_price",
-            "barcode",
-            "country_of_origin",
-            "weight",
-            "weight_unit",
-            "product_type",
-            "sell_when_out_of_stock",
-            "quantity",
-            "status",
-        ]
-        for field in fields:
-            value = data.get(field)
-            if value is not None:
-                setattr(product, field, value)
+            fields = [
+                "name", "description", "category_id", "price", "compare_at_price",
+                "stock", "unit_price", "charge_tax", "tax_rate", "cost_price",
+                "barcode", "country_of_origin", "weight", "weight_unit",
+                "product_type", "sell_when_out_of_stock", "quantity", "status",
+            ]
+            for field in fields:
+                value = data.get(field)
+                if value is not None:
+                    setattr(product, field, value)
 
-        if "sku" in data:
-            existing = Products.query.filter_by(sku=data["sku"]).first()
-            if existing and existing.id != product_id:
-                return (
-                    jsonify({"status": "error", "message": "SKU already exists"}),
-                    409,
-                )
-            product.sku = data["sku"]
+            if "sku" in data:
+                existing = Products.query.filter_by(sku=data["sku"]).first()
+                if existing and existing.id != product_id:
+                    return jsonify({"status": "error", "message": "SKU already exists"}), 409
+                product.sku = data["sku"]
 
         db.session.commit()
-        return (
-            jsonify({"status": "success", "message": "Product updated successfully"}),
-            200,
-        )
+        return jsonify({"status": "success", "message": "Product updated successfully"}), 200
 
     except Exception as e:
         db.session.rollback()
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "message": "Failed to update product",
-                    "error": str(e),
-                }
-            ),
-            500,
-        )
+        return jsonify({
+            "status": "error",
+            "message": "Failed to update product",
+            "error": str(e),
+        }), 500
 
 
 @adminBP.route("/product/bulk-update", methods=["PUT"])
@@ -710,95 +725,54 @@ def bulk_update_products():
         updates = data.get("updates", {})
 
         if not ids:
-            return (
-                jsonify({"status": "error", "message": "No product ids provided"}),
-                400,
-            )
+            return jsonify({"status": "error", "message": "No product ids provided"}), 400
 
         if len(ids) > 10:
-            return (
-                jsonify(
-                    {
-                        "status": "error",
-                        "message": "Maximum 10 products can be updated at once",
-                    }
-                ),
-                400,
-            )
+            return jsonify({"status": "error", "message": "Maximum 10 products can be updated at once"}), 400
 
         if not updates:
             return jsonify({"status": "error", "message": "No updates provided"}), 400
 
-        # only these fields are allowed in bulk update
         allowed_fields = [
-            "category_id",
-            "status",
-            "price",
-            "compare_at_price",
-            "stock",
-            "charge_tax",
-            "tax_rate",
-            "cost_price",
-            "country_of_origin",
-            "weight",
-            "weight_unit",
-            "product_type",
-            "sell_when_out_of_stock",
+            "category_id", "status", "price", "compare_at_price", "stock",
+            "charge_tax", "tax_rate", "cost_price", "country_of_origin",
+            "weight", "weight_unit", "product_type", "sell_when_out_of_stock",
         ]
 
         invalid_fields = [f for f in updates if f not in allowed_fields]
         if invalid_fields:
-            return (
-                jsonify(
-                    {
-                        "status": "error",
-                        "message": f"Fields not allowed in bulk update: {', '.join(invalid_fields)}",
-                    }
-                ),
-                400,
-            )
+            return jsonify({
+                "status": "error",
+                "message": f"Fields not allowed in bulk update: {', '.join(invalid_fields)}",
+            }), 400
 
         products = Products.query.filter(Products.id.in_(ids)).all()
         if not products:
             return jsonify({"status": "error", "message": "No products found"}), 404
 
-        # validate category exists if being updated
         if "category_id" in updates:
             category = Category.query.get(updates["category_id"])
             if not category:
-                return (
-                    jsonify({"status": "error", "message": "Category not found"}),
-                    404,
-                )
+                return jsonify({"status": "error", "message": "Category not found"}), 404
 
         for product in products:
             for field, value in updates.items():
                 setattr(product, field, value)
 
         db.session.commit()
-        return (
-            jsonify(
-                {
-                    "status": "success",
-                    "message": f"{len(products)} product(s) updated successfully",
-                    "ids": [p.id for p in products],
-                }
-            ),
-            200,
-        )
+        return jsonify({
+            "status": "success",
+            "message": f"{len(products)} product(s) updated successfully",
+            "ids": [p.id for p in products],
+        }), 200
 
     except Exception as e:
         db.session.rollback()
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "message": "Failed to bulk update products",
-                    "error": str(e),
-                }
-            ),
-            500,
-        )
+        return jsonify({
+            "status": "error",
+            "message": "Failed to bulk update products",
+            "error": str(e),
+        }), 500
 
 
 @adminBP.route("/product", methods=["DELETE"])
