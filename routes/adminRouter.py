@@ -14,6 +14,7 @@ load_dotenv()
 
 adminBP = Blueprint("admin", __name__, url_prefix="/admin")
 
+
 @adminBP.route("/signup", methods=["POST"])
 def signup():
     data = request.get_json()
@@ -213,44 +214,68 @@ def update_admin():
 # ---------------------- product section ------------------------------------------
 
 
-
 @adminBP.route("/product", methods=["POST"])
 @admin_middleware
 def create_product():
     try:
         content_type = request.content_type or ""
 
-        # --- helpers ---
         def to_bool(val, default=False):
-            if isinstance(val, bool): return val
-            if isinstance(val, str): return val.lower() == 'true'
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, str):
+                return val.lower() == "true"
             return default
 
         def to_float(val, default=None):
-            try: return float(val) if val not in (None, '') else default
-            except (ValueError, TypeError): return default
+            try:
+                return float(val) if val not in (None, "") else default
+            except (ValueError, TypeError):
+                return default
 
         def to_int(val, default=None):
-            try: return int(val) if val not in (None, '') else default
-            except (ValueError, TypeError): return default
+            try:
+                return int(val) if val not in (None, "") else default
+            except (ValueError, TypeError):
+                return default
+
+        def clean(val):
+            """Convert empty string to None for optional unique/nullable fields."""
+            return val if val not in (None, "") else None
 
         if "application/json" in content_type:
             data = request.get_json()
             products_data = data if isinstance(data, list) else [data]
 
             if len(products_data) > 10:
-                return jsonify({"status": "error", "message": "Maximum 10 products allowed at once"}), 400
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "Maximum 10 products allowed at once",
+                        }
+                    ),
+                    400,
+                )
 
             created = []
             for item in products_data:
                 existing = Products.query.filter_by(sku=item.get("sku")).first()
                 if existing:
-                    return jsonify({"status": "error", "message": f"SKU {item.get('sku')} already exists"}), 409
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": f"SKU {item.get('sku')} already exists",
+                            }
+                        ),
+                        409,
+                    )
 
                 product = Products(
                     category_id=item.get("category_id"),
                     name=item.get("name"),
-                    description=item.get("description"),
+                    description=clean(item.get("description")),
                     product_image=item.get("product_image"),
                     product_images=item.get("product_images", []),
                     sizes=item.get("sizes", []),
@@ -263,11 +288,11 @@ def create_product():
                     tax_rate=item.get("tax_rate"),
                     cost_price=item.get("cost_price"),
                     sku=item.get("sku"),
-                    barcode=item.get("barcode"),
-                    country_of_origin=item.get("country_of_origin"),
+                    barcode=clean(item.get("barcode")),
+                    country_of_origin=clean(item.get("country_of_origin")),
                     weight=item.get("weight"),
-                    weight_unit=item.get("weight_unit"),
-                    product_type=item.get("product_type"),
+                    weight_unit=clean(item.get("weight_unit")),
+                    product_type=clean(item.get("product_type")),
                     sell_when_out_of_stock=item.get("sell_when_out_of_stock", False),
                     quantity=item.get("quantity"),
                     status=item.get("status", "active"),
@@ -276,55 +301,76 @@ def create_product():
                 created.append(product)
 
             db.session.commit()
-            return jsonify({
-                "status": "success",
-                "message": f"{len(created)} product(s) created successfully",
-                "ids": [p.id for p in created],
-            }), 201
+            return (
+                jsonify(
+                    {
+                        "status": "success",
+                        "message": f"{len(created)} product(s) created successfully",
+                        "ids": [p.id for p in created],
+                    }
+                ),
+                201,
+            )
 
         else:
             data = request.form
 
             existing = Products.query.filter_by(sku=data.get("sku")).first()
             if existing:
-                return jsonify({"status": "error", "message": "SKU already exists"}), 409
+                return (
+                    jsonify({"status": "error", "message": "SKU already exists"}),
+                    409,
+                )
 
             main_image_file = request.files.get("product_image")
             if not main_image_file:
-                return jsonify({"status": "error", "message": "product_image is required"}), 400
+                return (
+                    jsonify(
+                        {"status": "error", "message": "product_image is required"}
+                    ),
+                    400,
+                )
 
             product_image_url = upload_file(main_image_file, folder="products")
 
             additional_files = request.files.getlist("product_images")
-            product_images_urls = upload_file(additional_files, folder="products") if additional_files else []
+            product_images_urls = (
+                upload_file(additional_files, folder="products")
+                if additional_files
+                else []
+            )
 
-            # --- type coercions ---
             category_id = to_int(data.get("category_id"))
-            price       = to_float(data.get("price"))
-            compare_at  = to_float(data.get("compare_at_price"))
-            stock       = to_int(data.get("stock"))
-            unit_price  = to_float(data.get("unit_price"))
-            charge_tax  = to_bool(data.get("charge_tax"))
-            tax_rate    = to_float(data.get("tax_rate"), default=0.0)
-            cost_price  = to_float(data.get("cost_price"))
-            weight      = to_float(data.get("weight"))
-            quantity    = to_int(data.get("quantity"))
-            sell_oos    = to_bool(data.get("sell_when_out_of_stock"))
+            price = to_float(data.get("price"))
+            compare_at = to_float(data.get("compare_at_price"))
+            stock = to_int(data.get("stock"))
+            unit_price = to_float(data.get("unit_price"))
+            charge_tax = to_bool(data.get("charge_tax"))
+            tax_rate = to_float(data.get("tax_rate"), default=0.0)
+            cost_price = to_float(data.get("cost_price"))
+            weight = to_float(data.get("weight"))
+            quantity = to_int(data.get("quantity"))
+            sell_oos = to_bool(data.get("sell_when_out_of_stock"))
 
-            # --- DB-level constraint checklist ---
             if category_id is None:
-                return jsonify({"status": "error", "message": "Category is required"}), 400
+                return (
+                    jsonify({"status": "error", "message": "Category is required"}),
+                    400,
+                )
             if price is None:
                 return jsonify({"status": "error", "message": "Price is required"}), 400
             if stock is None:
                 return jsonify({"status": "error", "message": "Stock is required"}), 400
             if quantity is None:
-                return jsonify({"status": "error", "message": "Quantity is required"}), 400
+                return (
+                    jsonify({"status": "error", "message": "Quantity is required"}),
+                    400,
+                )
 
             product = Products(
                 category_id=category_id,
                 name=data.get("name"),
-                description=data.get("description"),
+                description=clean(data.get("description")),
                 product_image=product_image_url,
                 product_images=product_images_urls,
                 sizes=json.loads(data.get("sizes", "[]")),
@@ -337,11 +383,11 @@ def create_product():
                 tax_rate=tax_rate,
                 cost_price=cost_price,
                 sku=data.get("sku"),
-                barcode=data.get("barcode"),
-                country_of_origin=data.get("country_of_origin"),
+                barcode=clean(data.get("barcode")),
+                country_of_origin=clean(data.get("country_of_origin")),
                 weight=weight,
-                weight_unit=data.get("weight_unit"),
-                product_type=data.get("product_type"),
+                weight_unit=clean(data.get("weight_unit")),
+                product_type=clean(data.get("product_type")),
                 sell_when_out_of_stock=sell_oos,
                 quantity=quantity,
                 status=data.get("status", "active"),
@@ -349,20 +395,317 @@ def create_product():
             db.session.add(product)
             db.session.commit()
 
-            return jsonify({
-                "status": "success",
-                "message": "Product created successfully",
-                "id": product.id,
-            }), 201
+            return (
+                jsonify(
+                    {
+                        "status": "success",
+                        "message": "Product created successfully",
+                        "id": product.id,
+                    }
+                ),
+                201,
+            )
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({
-            "status": "error",
-            "message": "Failed to create product",
-            "error": str(e),
-        }), 500
-        
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to create product",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/product/<int:product_id>", methods=["PUT"])
+@admin_middleware
+def update_product(product_id):
+    try:
+        product = Products.query.get(product_id)
+        if not product:
+            return jsonify({"status": "error", "message": "Product not found"}), 404
+
+        content_type = request.content_type or ""
+
+        def to_bool(val, default=False):
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, str):
+                return val.lower() == "true"
+            return default
+
+        def to_float(val, default=None):
+            try:
+                return float(val) if val not in (None, "") else default
+            except (ValueError, TypeError):
+                return default
+
+        def to_int(val, default=None):
+            try:
+                return int(val) if val not in (None, "") else default
+            except (ValueError, TypeError):
+                return default
+
+        def clean(val):
+            return val if val not in (None, "") else None
+
+        if "multipart/form-data" in content_type:
+            data = request.form
+
+            if "product_image" in request.files:
+                product.product_image = upload_file(
+                    request.files["product_image"], folder="products"
+                )
+
+            additional_files = request.files.getlist("product_images")
+            if additional_files:
+                product.product_images = upload_file(
+                    additional_files, folder="products"
+                )
+
+            if "sizes" in data:
+                product.sizes = json.loads(data.get("sizes"))
+            if "colors" in data:
+                product.colors = json.loads(data.get("colors"))
+
+            coerce_map = {
+                "category_id": lambda v: to_int(v),
+                "price": lambda v: to_float(v),
+                "compare_at_price": lambda v: to_float(v),
+                "stock": lambda v: to_int(v),
+                "unit_price": lambda v: to_float(v),
+                "charge_tax": lambda v: to_bool(v),
+                "tax_rate": lambda v: to_float(v, default=0.0),
+                "cost_price": lambda v: to_float(v),
+                "weight": lambda v: to_float(v),
+                "quantity": lambda v: to_int(v),
+                "sell_when_out_of_stock": lambda v: to_bool(v),
+                # clean fields — empty string → None
+                "barcode": lambda v: clean(v),
+                "country_of_origin": lambda v: clean(v),
+                "weight_unit": lambda v: clean(v),
+                "product_type": lambda v: clean(v),
+                "description": lambda v: clean(v),
+            }
+
+            fields = [
+                "name",
+                "description",
+                "category_id",
+                "price",
+                "compare_at_price",
+                "stock",
+                "unit_price",
+                "charge_tax",
+                "tax_rate",
+                "cost_price",
+                "barcode",
+                "country_of_origin",
+                "weight",
+                "weight_unit",
+                "product_type",
+                "sell_when_out_of_stock",
+                "quantity",
+                "status",
+            ]
+            for field in fields:
+                value = data.get(field)
+                if value is not None:
+                    coerced = coerce_map[field](value) if field in coerce_map else value
+                    setattr(product, field, coerced)
+
+            if "sku" in data:
+                existing = Products.query.filter_by(sku=data["sku"]).first()
+                if existing and existing.id != product_id:
+                    return (
+                        jsonify({"status": "error", "message": "SKU already exists"}),
+                        409,
+                    )
+                product.sku = data["sku"]
+
+        else:
+            data = request.get_json()
+
+            if "sizes" in data:
+                product.sizes = data["sizes"]
+            if "colors" in data:
+                product.colors = data["colors"]
+            if "product_image" in data:
+                product.product_image = data["product_image"]
+            if "product_images" in data:
+                product.product_images = data["product_images"]
+
+            fields = [
+                "name",
+                "description",
+                "category_id",
+                "price",
+                "compare_at_price",
+                "stock",
+                "unit_price",
+                "charge_tax",
+                "tax_rate",
+                "cost_price",
+                "barcode",
+                "country_of_origin",
+                "weight",
+                "weight_unit",
+                "product_type",
+                "sell_when_out_of_stock",
+                "quantity",
+                "status",
+            ]
+            clean_fields = {
+                "barcode",
+                "country_of_origin",
+                "weight_unit",
+                "product_type",
+                "description",
+            }
+
+            for field in fields:
+                if field in data:
+                    value = data[field]
+                    setattr(
+                        product, field, clean(value) if field in clean_fields else value
+                    )
+
+            if "sku" in data:
+                existing = Products.query.filter_by(sku=data["sku"]).first()
+                if existing and existing.id != product_id:
+                    return (
+                        jsonify({"status": "error", "message": "SKU already exists"}),
+                        409,
+                    )
+                product.sku = data["sku"]
+
+        db.session.commit()
+        return (
+            jsonify({"status": "success", "message": "Product updated successfully"}),
+            200,
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to update product",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/product/bulk-update", methods=["PUT"])
+@admin_middleware
+def bulk_update_products():
+    try:
+        data = request.get_json()
+        ids = data.get("ids", [])
+        updates = data.get("updates", {})
+
+        if not ids:
+            return (
+                jsonify({"status": "error", "message": "No product ids provided"}),
+                400,
+            )
+        if len(ids) > 10:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "Maximum 10 products can be updated at once",
+                    }
+                ),
+                400,
+            )
+        if not updates:
+            return jsonify({"status": "error", "message": "No updates provided"}), 400
+
+        allowed_fields = [
+            "category_id",
+            "status",
+            "price",
+            "compare_at_price",
+            "stock",
+            "charge_tax",
+            "tax_rate",
+            "cost_price",
+            "country_of_origin",
+            "weight",
+            "weight_unit",
+            "product_type",
+            "sell_when_out_of_stock",
+        ]
+        clean_fields = {"country_of_origin", "weight_unit", "product_type"}
+
+        invalid_fields = [f for f in updates if f not in allowed_fields]
+        if invalid_fields:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": f"Fields not allowed in bulk update: {', '.join(invalid_fields)}",
+                    }
+                ),
+                400,
+            )
+
+        products = Products.query.filter(Products.id.in_(ids)).all()
+        if not products:
+            return jsonify({"status": "error", "message": "No products found"}), 404
+
+        if "category_id" in updates:
+            category = Category.query.get(updates["category_id"])
+            if not category:
+                return (
+                    jsonify({"status": "error", "message": "Category not found"}),
+                    404,
+                )
+
+        for product in products:
+            for field, value in updates.items():
+                setattr(
+                    product,
+                    field,
+                    (
+                        (value if value not in (None, "") else None)
+                        if field in clean_fields
+                        else value
+                    ),
+                )
+
+        db.session.commit()
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": f"{len(products)} product(s) updated successfully",
+                    "ids": [p.id for p in products],
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to bulk update products",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
 
 @adminBP.route("/product/<int:product_id>", methods=["GET"])
 @admin_middleware
@@ -375,57 +718,87 @@ def get_product(product_id):
         reviews = product.product_reviews
         ratings = [r.rating for r in reviews]
 
-        return jsonify({
-            "status": "success",
-            "product": {
-                "id": product.id,
-                "name": product.name,
-                "description": product.description,
-                "product_image": product.product_image,
-                "product_images": product.product_images,
-                "category_id": product.category_id,
-                "category": product.category.name if product.category else None,
-                "sizes": product.sizes,
-                "colors": product.colors,
-                "price": product.price,
-                "compare_at_price": product.compare_at_price,
-                "stock": product.stock,
-                "unit_price": product.unit_price,
-                "charge_tax": product.charge_tax,
-                "tax_rate": product.tax_rate,
-                "cost_price": product.cost_price,
-                "sku": product.sku,
-                "barcode": product.barcode,
-                "country_of_origin": product.country_of_origin,
-                "weight": product.weight,
-                "weight_unit": product.weight_unit,
-                "product_type": product.product_type,
-                "sell_when_out_of_stock": product.sell_when_out_of_stock,
-                "quantity": product.quantity,
-                "status": product.status,
-                "created_at": product.created_at,
-                "updated_at": product.updated_at,
-                "ratings": {
-                    "average": round(sum(ratings) / len(ratings), 2) if ratings else 0,
-                    "total": len(ratings),
-                    "breakdown": {i: sum(1 for r in reviews if r.rating == i) for i in range(1, 6)},
-                },
-                "reviews": [{
-                    "id": r.id,
-                    "rating": r.rating,
-                    "review": r.review,
-                    "user": {
-                        "id": r.user_id,
-                        "username": User.query.get(r.user_id).username if User.query.get(r.user_id) else None,
-                        "profile_picture": User.query.get(r.user_id).profile_picture if User.query.get(r.user_id) else None,
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "product": {
+                        "id": product.id,
+                        "name": product.name,
+                        "description": product.description,
+                        "product_image": product.product_image,
+                        "product_images": product.product_images,
+                        "category_id": product.category_id,
+                        "category": product.category.name if product.category else None,
+                        "sizes": product.sizes,
+                        "colors": product.colors,
+                        "price": product.price,
+                        "compare_at_price": product.compare_at_price,
+                        "stock": product.stock,
+                        "unit_price": product.unit_price,
+                        "charge_tax": product.charge_tax,
+                        "tax_rate": product.tax_rate,
+                        "cost_price": product.cost_price,
+                        "sku": product.sku,
+                        "barcode": product.barcode,
+                        "country_of_origin": product.country_of_origin,
+                        "weight": product.weight,
+                        "weight_unit": product.weight_unit,
+                        "product_type": product.product_type,
+                        "sell_when_out_of_stock": product.sell_when_out_of_stock,
+                        "quantity": product.quantity,
+                        "status": product.status,
+                        "created_at": product.created_at,
+                        "updated_at": product.updated_at,
+                        "ratings": {
+                            "average": (
+                                round(sum(ratings) / len(ratings), 2) if ratings else 0
+                            ),
+                            "total": len(ratings),
+                            "breakdown": {
+                                i: sum(1 for r in reviews if r.rating == i)
+                                for i in range(1, 6)
+                            },
+                        },
+                        "reviews": [
+                            {
+                                "id": r.id,
+                                "rating": r.rating,
+                                "review": r.review,
+                                "user": {
+                                    "id": r.user_id,
+                                    "username": (
+                                        User.query.get(r.user_id).username
+                                        if User.query.get(r.user_id)
+                                        else None
+                                    ),
+                                    "profile_picture": (
+                                        User.query.get(r.user_id).profile_picture
+                                        if User.query.get(r.user_id)
+                                        else None
+                                    ),
+                                },
+                                "created_at": r.created_at,
+                            }
+                            for r in reviews
+                        ],
                     },
-                    "created_at": r.created_at,
-                } for r in reviews],
-            }
-        }), 200
+                }
+            ),
+            200,
+        )
 
     except Exception as e:
-        return jsonify({"status": "error", "message": "Failed to fetch product", "error": str(e)}), 500
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch product",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
 
 
 @adminBP.route("/product", methods=["GET"])
@@ -607,163 +980,6 @@ def get_products():
             ),
             500,
         )
-
-
-@adminBP.route("/product/<int:product_id>", methods=["PUT"])
-@admin_middleware
-def update_product(product_id):
-    try:
-        product = Products.query.get(product_id)
-        if not product:
-            return jsonify({"status": "error", "message": "Product not found"}), 404
-
-        content_type = request.content_type or ""
-
-        if "multipart/form-data" in content_type:
-            data = request.form
-
-            if "product_image" in request.files:
-                product.product_image = upload_file(request.files["product_image"], folder="products")
-
-            additional_files = request.files.getlist("product_images")
-            if additional_files:
-                product.product_images = upload_file(additional_files, folder="products")
-
-            if "sizes" in data:
-                product.sizes = json.loads(data.get("sizes"))
-            if "colors" in data:
-                product.colors = json.loads(data.get("colors"))
-
-            coerce_map = {
-                "category_id":            lambda v: to_int(v),
-                "price":                  lambda v: to_float(v),
-                "compare_at_price":       lambda v: to_float(v),
-                "stock":                  lambda v: to_int(v),
-                "unit_price":             lambda v: to_float(v),
-                "charge_tax":             lambda v: to_bool(v),
-                "tax_rate":               lambda v: to_float(v, default=0.0),
-                "cost_price":             lambda v: to_float(v),
-                "weight":                 lambda v: to_float(v),
-                "quantity":               lambda v: to_int(v),
-                "sell_when_out_of_stock": lambda v: to_bool(v),
-            }
-
-            fields = [
-                "name", "description", "category_id", "price", "compare_at_price",
-                "stock", "unit_price", "charge_tax", "tax_rate", "cost_price",
-                "barcode", "country_of_origin", "weight", "weight_unit",
-                "product_type", "sell_when_out_of_stock", "quantity", "status",
-            ]
-            for field in fields:
-                value = data.get(field)
-                if value is not None:
-                    coerced = coerce_map[field](value) if field in coerce_map else value
-                    setattr(product, field, coerced)
-
-            if "sku" in data:
-                existing = Products.query.filter_by(sku=data["sku"]).first()
-                if existing and existing.id != product_id:
-                    return jsonify({"status": "error", "message": "SKU already exists"}), 409
-                product.sku = data["sku"]
-
-        else:
-            data = request.get_json()
-
-            if "sizes" in data:
-                product.sizes = data["sizes"]
-            if "colors" in data:
-                product.colors = data["colors"]
-            if "product_image" in data:
-                product.product_image = data["product_image"]
-            if "product_images" in data:
-                product.product_images = data["product_images"]
-
-            fields = [
-                "name", "description", "category_id", "price", "compare_at_price",
-                "stock", "unit_price", "charge_tax", "tax_rate", "cost_price",
-                "barcode", "country_of_origin", "weight", "weight_unit",
-                "product_type", "sell_when_out_of_stock", "quantity", "status",
-            ]
-            for field in fields:
-                value = data.get(field)
-                if value is not None:
-                    setattr(product, field, value)
-
-            if "sku" in data:
-                existing = Products.query.filter_by(sku=data["sku"]).first()
-                if existing and existing.id != product_id:
-                    return jsonify({"status": "error", "message": "SKU already exists"}), 409
-                product.sku = data["sku"]
-
-        db.session.commit()
-        return jsonify({"status": "success", "message": "Product updated successfully"}), 200
-
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({
-            "status": "error",
-            "message": "Failed to update product",
-            "error": str(e),
-        }), 500
-
-
-@adminBP.route("/product/bulk-update", methods=["PUT"])
-@admin_middleware
-def bulk_update_products():
-    try:
-        data = request.get_json()
-        ids = data.get("ids", [])
-        updates = data.get("updates", {})
-
-        if not ids:
-            return jsonify({"status": "error", "message": "No product ids provided"}), 400
-
-        if len(ids) > 10:
-            return jsonify({"status": "error", "message": "Maximum 10 products can be updated at once"}), 400
-
-        if not updates:
-            return jsonify({"status": "error", "message": "No updates provided"}), 400
-
-        allowed_fields = [
-            "category_id", "status", "price", "compare_at_price", "stock",
-            "charge_tax", "tax_rate", "cost_price", "country_of_origin",
-            "weight", "weight_unit", "product_type", "sell_when_out_of_stock",
-        ]
-
-        invalid_fields = [f for f in updates if f not in allowed_fields]
-        if invalid_fields:
-            return jsonify({
-                "status": "error",
-                "message": f"Fields not allowed in bulk update: {', '.join(invalid_fields)}",
-            }), 400
-
-        products = Products.query.filter(Products.id.in_(ids)).all()
-        if not products:
-            return jsonify({"status": "error", "message": "No products found"}), 404
-
-        if "category_id" in updates:
-            category = Category.query.get(updates["category_id"])
-            if not category:
-                return jsonify({"status": "error", "message": "Category not found"}), 404
-
-        for product in products:
-            for field, value in updates.items():
-                setattr(product, field, value)
-
-        db.session.commit()
-        return jsonify({
-            "status": "success",
-            "message": f"{len(products)} product(s) updated successfully",
-            "ids": [p.id for p in products],
-        }), 200
-
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({
-            "status": "error",
-            "message": "Failed to bulk update products",
-            "error": str(e),
-        }), 500
 
 
 @adminBP.route("/product", methods=["DELETE"])
@@ -1306,7 +1522,15 @@ def update_category(category_id):
                     Category.name == data["name"], Category.id != category_id
                 ).first()
                 if existing:
-                    return jsonify({"status": "error", "message": "Category name already exists"}), 409
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": "Category name already exists",
+                            }
+                        ),
+                        409,
+                    )
                 category.name = data["name"]
 
             if "slug" in data:
@@ -1314,7 +1538,15 @@ def update_category(category_id):
                     Category.slug == data["slug"], Category.id != category_id
                 ).first()
                 if existing:
-                    return jsonify({"status": "error", "message": "Category slug already exists"}), 409
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": "Category slug already exists",
+                            }
+                        ),
+                        409,
+                    )
                 category.slug = data["slug"]
 
             if "description" in data:
@@ -1330,7 +1562,15 @@ def update_category(category_id):
                     Category.name == data["name"], Category.id != category_id
                 ).first()
                 if existing:
-                    return jsonify({"status": "error", "message": "Category name already exists"}), 409
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": "Category name already exists",
+                            }
+                        ),
+                        409,
+                    )
                 category.name = data["name"]
 
             if "slug" in data:
@@ -1338,7 +1578,15 @@ def update_category(category_id):
                     Category.slug == data["slug"], Category.id != category_id
                 ).first()
                 if existing:
-                    return jsonify({"status": "error", "message": "Category slug already exists"}), 409
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": "Category slug already exists",
+                            }
+                        ),
+                        409,
+                    )
                 category.slug = data["slug"]
 
             if "description" in data:
@@ -1352,13 +1600,29 @@ def update_category(category_id):
             if "add_product_ids" in data:
                 add_ids = data["add_product_ids"]
                 if not isinstance(add_ids, list):
-                    return jsonify({"status": "error", "message": "add_product_ids must be a list"}), 400
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": "add_product_ids must be a list",
+                            }
+                        ),
+                        400,
+                    )
 
                 products_to_add = Products.query.filter(Products.id.in_(add_ids)).all()
                 if len(products_to_add) != len(add_ids):
                     found_ids = {p.id for p in products_to_add}
                     missing = [i for i in add_ids if i not in found_ids]
-                    return jsonify({"status": "error", "message": f"Products not found: {missing}"}), 404
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": f"Products not found: {missing}",
+                            }
+                        ),
+                        404,
+                    )
 
                 for product in products_to_add:
                     product.category_id = category_id
@@ -1367,30 +1631,53 @@ def update_category(category_id):
             if "remove_product_ids" in data:
                 remove_ids = data["remove_product_ids"]
                 if not isinstance(remove_ids, list):
-                    return jsonify({"status": "error", "message": "remove_product_ids must be a list"}), 400
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": "remove_product_ids must be a list",
+                            }
+                        ),
+                        400,
+                    )
 
                 products_to_remove = Products.query.filter(
-                    Products.id.in_(remove_ids),
-                    Products.category_id == category_id
+                    Products.id.in_(remove_ids), Products.category_id == category_id
                 ).all()
                 if len(products_to_remove) != len(remove_ids):
                     found_ids = {p.id for p in products_to_remove}
                     missing = [i for i in remove_ids if i not in found_ids]
-                    return jsonify({"status": "error", "message": f"Products not found in this category: {missing}"}), 404
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": f"Products not found in this category: {missing}",
+                            }
+                        ),
+                        404,
+                    )
 
                 for product in products_to_remove:
                     product.category_id = None
 
         db.session.commit()
-        return jsonify({"status": "success", "message": "Category updated successfully"}), 200
+        return (
+            jsonify({"status": "success", "message": "Category updated successfully"}),
+            200,
+        )
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({
-            "status": "error",
-            "message": "Failed to update category",
-            "error": str(e),
-        }), 500
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to update category",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
 
 
 @adminBP.route("/category", methods=["DELETE"])
@@ -2227,6 +2514,7 @@ def bulk_update_orders():
 
 
 # ----------------------- banner -----------------------------------
+
 
 @adminBP.route("/banner", methods=["POST"])
 @admin_middleware
@@ -3935,7 +4223,6 @@ def get_dashboard():
         )
 
 
-
 @adminBP.route("/collection", methods=["POST"])
 @admin_middleware
 def create_collection():
@@ -3948,7 +4235,12 @@ def create_collection():
             return jsonify({"status": "error", "message": "Name is required"}), 400
 
         if Collection.query.filter_by(name=name).first():
-            return jsonify({"status": "error", "message": "Collection name already exists"}), 409
+            return (
+                jsonify(
+                    {"status": "error", "message": "Collection name already exists"}
+                ),
+                409,
+            )
 
         image_url = None
         if "image" in request.files:
@@ -3978,17 +4270,31 @@ def create_collection():
             added_products.append(pid)
 
         db.session.commit()
-        return jsonify({
-            "status": "success",
-            "message": "Collection created",
-            "collection_id": collection.id,
-            "added_products": added_products,
-            "skipped_products": skipped_products,
-        }), 201
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": "Collection created",
+                    "collection_id": collection.id,
+                    "added_products": added_products,
+                    "skipped_products": skipped_products,
+                }
+            ),
+            201,
+        )
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({"status": "error", "message": "Failed to create collection", "error": str(e)}), 500
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to create collection",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
 
 
 @adminBP.route("/collection", methods=["GET"])
@@ -3998,27 +4304,38 @@ def get_collections():
         collections = Collection.query.all()
         result = []
         for c in collections:
-            result.append({
-                "id": c.id,
-                "name": c.name,
-                "description": c.description,
-                "image": c.image,
-                "product_count": len(c.collection_products),
-                "products": [
-                    {
-                        "id": cp.product.id,
-                        "name": cp.product.name,
-                        "product_image": cp.product.product_image,
-                        "price": cp.product.price,
-                        "status": cp.product.status,
-                    }
-                    for cp in c.collection_products
-                ],
-            })
+            result.append(
+                {
+                    "id": c.id,
+                    "name": c.name,
+                    "description": c.description,
+                    "image": c.image,
+                    "product_count": len(c.collection_products),
+                    "products": [
+                        {
+                            "id": cp.product.id,
+                            "name": cp.product.name,
+                            "product_image": cp.product.product_image,
+                            "price": cp.product.price,
+                            "status": cp.product.status,
+                        }
+                        for cp in c.collection_products
+                    ],
+                }
+            )
         return jsonify({"status": "success", "collections": result}), 200
 
     except Exception as e:
-        return jsonify({"status": "error", "message": "Failed to fetch collections", "error": str(e)}), 500
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch collections",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
 
 
 @adminBP.route("/collection/<int:collection_id>", methods=["GET"])
@@ -4029,32 +4346,46 @@ def get_collection(collection_id):
         if not c:
             return jsonify({"status": "error", "message": "Collection not found"}), 404
 
-        return jsonify({
-            "status": "success",
-            "collection": {
-                "id": c.id,
-                "name": c.name,
-                "description": c.description,
-                "image": c.image,
-                "product_count": len(c.collection_products),
-                "products": [
-                    {
-                        "id": cp.product.id,
-                        "name": cp.product.name,
-                        "product_image": cp.product.product_image,
-                        "price": cp.product.price,
-                        "compare_at_price": cp.product.compare_at_price,
-                        "stock": cp.product.stock,
-                        "status": cp.product.status,
-                        "sku": cp.product.sku,
-                    }
-                    for cp in c.collection_products
-                ],
-            }
-        }), 200
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "collection": {
+                        "id": c.id,
+                        "name": c.name,
+                        "description": c.description,
+                        "image": c.image,
+                        "product_count": len(c.collection_products),
+                        "products": [
+                            {
+                                "id": cp.product.id,
+                                "name": cp.product.name,
+                                "product_image": cp.product.product_image,
+                                "price": cp.product.price,
+                                "compare_at_price": cp.product.compare_at_price,
+                                "stock": cp.product.stock,
+                                "status": cp.product.status,
+                                "sku": cp.product.sku,
+                            }
+                            for cp in c.collection_products
+                        ],
+                    },
+                }
+            ),
+            200,
+        )
 
     except Exception as e:
-        return jsonify({"status": "error", "message": "Failed to fetch collection", "error": str(e)}), 500
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch collection",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
 
 
 @adminBP.route("/collection/<int:collection_id>", methods=["PUT"])
@@ -4067,13 +4398,22 @@ def edit_collection(collection_id):
 
         name = request.form.get("name", "").strip()
         description = request.form.get("description", "").strip()
-        add_product_ids = request.form.getlist("add_product_ids")      # products to add
-        remove_product_ids = request.form.getlist("remove_product_ids")  # products to remove
+        add_product_ids = request.form.getlist("add_product_ids")  # products to add
+        remove_product_ids = request.form.getlist(
+            "remove_product_ids"
+        )  # products to remove
 
         if name:
-            existing = Collection.query.filter(Collection.name == name, Collection.id != collection_id).first()
+            existing = Collection.query.filter(
+                Collection.name == name, Collection.id != collection_id
+            ).first()
             if existing:
-                return jsonify({"status": "error", "message": "Collection name already exists"}), 409
+                return (
+                    jsonify(
+                        {"status": "error", "message": "Collection name already exists"}
+                    ),
+                    409,
+                )
             c.name = name
 
         if description:
@@ -4091,7 +4431,9 @@ def edit_collection(collection_id):
                 skipped_remove.append({"id": pid, "reason": "Invalid ID"})
                 continue
 
-            cp = CollectionProducts.query.filter_by(product_id=pid, collection_id=collection_id).first()
+            cp = CollectionProducts.query.filter_by(
+                product_id=pid, collection_id=collection_id
+            ).first()
             if not cp:
                 skipped_remove.append({"id": pid, "reason": "Not in collection"})
                 continue
@@ -4112,27 +4454,45 @@ def edit_collection(collection_id):
                 skipped_add.append({"id": pid, "reason": "Product not found"})
                 continue
 
-            already_exists = CollectionProducts.query.filter_by(product_id=pid, collection_id=collection_id).first()
+            already_exists = CollectionProducts.query.filter_by(
+                product_id=pid, collection_id=collection_id
+            ).first()
             if already_exists:
                 skipped_add.append({"id": pid, "reason": "Already in collection"})
                 continue
 
-            db.session.add(CollectionProducts(product_id=pid, collection_id=collection_id))
+            db.session.add(
+                CollectionProducts(product_id=pid, collection_id=collection_id)
+            )
             added.append(pid)
 
         db.session.commit()
-        return jsonify({
-            "status": "success",
-            "message": "Collection updated",
-            "added": added,
-            "removed": removed,
-            "skipped_add": skipped_add,
-            "skipped_remove": skipped_remove,
-        }), 200
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": "Collection updated",
+                    "added": added,
+                    "removed": removed,
+                    "skipped_add": skipped_add,
+                    "skipped_remove": skipped_remove,
+                }
+            ),
+            200,
+        )
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({"status": "error", "message": "Failed to update collection", "error": str(e)}), 500
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to update collection",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
 
 
 @adminBP.route("/collection/<int:collection_id>", methods=["DELETE"])
@@ -4149,6 +4509,13 @@ def delete_collection(collection_id):
 
     except Exception as e:
         db.session.rollback()
-        return jsonify({"status": "error", "message": "Failed to delete collection", "error": str(e)}), 500
-    
-    
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to delete collection",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
