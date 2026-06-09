@@ -91,7 +91,7 @@ class Category(db.Model):
         back_populates="category",
         lazy=True,
         uselist=True,
-        cascade="all, delete-orphan",
+        cascade="save-update, merge",
     )
 
 
@@ -99,7 +99,7 @@ class Products(db.Model):
     __tablename__ = "products"
     id = db.Column(db.Integer, primary_key=True)
     category_id = db.Column(
-        db.Integer, db.ForeignKey("category.id", ondelete="CASCADE"), nullable=False
+        db.Integer, db.ForeignKey("category.id", ondelete="SET NULL"), nullable=True
     )
     name = db.Column(db.String(255), unique=True, nullable=False)
     description = db.Column(db.Text, nullable=True)
