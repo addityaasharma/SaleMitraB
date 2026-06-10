@@ -5,7 +5,7 @@ from functools import wraps
 from flask import request, jsonify, g
 from models.user import *
 from models.admin import *
-import jwt, os, uuid, datetime
+import jwt, os, uuid, datetime, threading
 from werkzeug.utils import secure_filename
 
 load_dotenv()
@@ -15,22 +15,39 @@ def generateOTP_function():
     return str(secrets.randbelow(900000) + 100000)
 
 
+import os
+import threading
+import resend
+
+
+def _send_otp(email, otp):
+    try:
+        resend.Emails.send(
+            {
+                "from": os.getenv("EMAIL_FROM"),
+                "to": [email],
+                "subject": "Verify Your Email",
+                "html": f"""
+            <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;background:#fff;border-radius:16px;border:1px solid #eee;">
+                <h2 style="font-size:22px;font-weight:700;color:#000;margin-bottom:4px;">Verify your account</h2>
+                <p style="color:#666;font-size:14px;margin-bottom:24px;">Use the OTP below to verify your SaleMitra account.</p>
+                <div style="background:#f5f5f5;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">
+                    <p style="font-size:36px;font-weight:800;letter-spacing:8px;color:#000;margin:0;">{otp}</p>
+                </div>
+                <p style="color:#999;font-size:12px;">This OTP expires in 5 minutes. Do not share it with anyone.</p>
+                <hr style="border:none;border-top:1px solid #eee;margin:24px 0;">
+                <p style="color:#ccc;font-size:11px;text-align:center;">SaleMitra</p>
+            </div>
+            """,
+            }
+        )
+    except Exception as e:
+        print(f"[mailer] OTP send failed to {email}: {e}")
+
+
 def sendMail_function(email, otp):
-    resend.Emails.send(
-        {
-            "from": os.getenv("EMAIL_FROM"),
-            "to": [email],
-            "subject": "Verify Your Email",
-            "html": f"""
-        <div style="font-family: Arial, sans-serif;">
-            <h2>Email Verification</h2>
-            <p>Your OTP code is:</p>
-            <h1>{otp}</h1>
-            <p>This code will expire in 5 minutes.</p>
-        </div>
-        """,
-        }
-    )
+    thread = threading.Thread(target=_send_otp, args=(email, otp), daemon=True)
+    thread.start()
 
 
 def middleware(f):
@@ -108,14 +125,22 @@ def generate_order_id():
 
 
 def to_bool(val, default=False):
-    if isinstance(val, bool): return val
-    if isinstance(val, str): return val.lower() == 'true'
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() == "true"
     return default
 
+
 def to_float(val, default=None):
-    try: return float(val) if val not in (None, '') else default
-    except (ValueError, TypeError): return default
+    try:
+        return float(val) if val not in (None, "") else default
+    except (ValueError, TypeError):
+        return default
+
 
 def to_int(val, default=None):
-    try: return int(val) if val not in (None, '') else default
-    except (ValueError, TypeError): return default
+    try:
+        return int(val) if val not in (None, "") else default
+    except (ValueError, TypeError):
+        return default

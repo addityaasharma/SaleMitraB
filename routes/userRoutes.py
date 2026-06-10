@@ -45,7 +45,7 @@ def signup_otp():
                 }
             ),
         )
-        send_otp_task.delay(data["email"], otp)
+        sendMail_function(data["email"], otp)
 
         return jsonify({"status": "success", "message": "OTP sent successfully"}), 200
     except Exception as e:
@@ -215,7 +215,7 @@ def forgot_password():
 
         otp = generateOTP_function()
         redis.setex(f"otp:{data.get('email')}", 300, otp)
-        send_otp_task.delay(data["email"], otp)
+        sendMail_function(data["email"], otp)
         return jsonify({"status": "success", "message": "OTP sent successfully"}), 200
     except Exception as e:
         return (
