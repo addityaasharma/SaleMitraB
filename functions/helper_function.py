@@ -53,7 +53,13 @@ def sendMail_function(email, otp):
 def middleware(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = request.cookies.get("user_auth_token")
+        token = None
+
+        # get token from Authorization header
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+
         if not token:
             return jsonify({"status": "error", "message": "Unauthorized"}), 401
 

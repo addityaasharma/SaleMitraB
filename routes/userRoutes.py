@@ -73,18 +73,18 @@ def verify_otp():
         if check_user:
             return (
                 jsonify(
-                    {"status": "error", "message": "User already exist. Please Login"}
+                    {"status": "error", "message": "User already exists. Please Login"}
                 ),
                 400,
             )
 
-        user_data = redis.get(f"otp:{data.get('email')}")
+        user_data = redis_client.get(f"otp:{data.get('email')}")
         if not user_data:
             return jsonify({"status": "error", "message": "OTP expired"}), 404
 
         user_data = json.loads(user_data)
         if data["otp"] != user_data["otp"]:
-            return jsonify({"status": "error", "message": "Invalid OTP."}), 400
+            return jsonify({"status": "error", "message": "Invalid OTP"}), 400
 
         hash_pass = generate_password_hash(user_data["password"])
         new_user = User(
@@ -95,7 +95,8 @@ def verify_otp():
         )
         db.session.add(new_user)
         db.session.commit()
-        redis.delete(f"otp:{data['email']}")
+        redis_client.delete(f"otp:{data['email']}")
+
         token = jwt.encode(
             {
                 "userID": new_user.id,
@@ -105,15 +106,23 @@ def verify_otp():
             os.getenv("SECRET_KEY"),
             algorithm="HS256",
         )
-        response = jsonify({"status": "success", "message": "User signup successfully"})
-        response.set_cookie(
-            "user_auth_token",
-            token,
-            httponly=True,
-            max_age=7 * 24 * 60 * 60,
-        )
 
-        return response
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": "User signup successfully",
+                    "token": token,
+                    "user": {
+                        "id": new_user.id,
+                        "email": new_user.email,
+                        "username": new_user.username,
+                        "role": new_user.role,
+                    },
+                }
+            ),
+            201,
+        )
 
     except Exception as e:
         db.session.rollback()
@@ -150,7 +159,7 @@ def login():
             )
 
         if not check_password_hash(check_user.password, data["password"]):
-            return jsonify({"status": "error", "message": "wrong password"}), 400
+            return jsonify({"status": "error", "message": "Wrong password"}), 400
 
         token = jwt.encode(
             {
@@ -161,15 +170,28 @@ def login():
             os.getenv("SECRET_KEY"),
             algorithm="HS256",
         )
-        response = jsonify({"status": "success", "message": "User Login successfully"})
-        response.set_cookie(
-            "user_auth_token",
-            token,
-            httponly=True,
-            max_age=7 * 24 * 60 * 60,
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": "User login successfully",
+                    "token": token,
+                    "user": {
+                        "id": check_user.id,
+                        "email": check_user.email,
+                        "username": check_user.username,
+                        "role": check_user.role,
+                        "profile_picture": check_user.profile_picture,
+                        "phone": check_user.phone,
+                        "first_name": check_user.first_name,
+                        "last_name": check_user.last_name,
+                    },
+                }
+            ),
+            200,
         )
 
-        return response
     except Exception as e:
         return (
             jsonify({"status": "error", "message": "Failed to login", "error": str(e)}),
@@ -180,11 +202,12 @@ def login():
 @userBP.route("/logout", methods=["POST"])
 def logout():
     try:
-        response = jsonify({"status": "success", "message": "Logout successfully"})
-        response.delete_cookie("user_auth_token")
+        return jsonify({"status": "success", "message": "Logout successfully"}), 200
     except Exception as e:
         return (
-            jsonify({"status": "error", "message": "Something error", "error": str(e)}),
+            jsonify(
+                {"status": "error", "message": "Something went wrong", "error": str(e)}
+            ),
             500,
         )
 
