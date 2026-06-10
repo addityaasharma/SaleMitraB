@@ -183,9 +183,7 @@ def login():
                         "username": check_user.username,
                         "role": check_user.role,
                         "profile_picture": check_user.profile_picture,
-                        "phone": check_user.phone,
-                        "first_name": check_user.first_name,
-                        "last_name": check_user.last_name,
+                        "phone": check_user.phone_number,
                     },
                 }
             ),
