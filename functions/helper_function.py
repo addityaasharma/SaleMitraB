@@ -125,7 +125,7 @@ def upload_file(files, folder="uploads"):
 
 
 def generate_order_id():
-    date_str = datetime.now().strftime("%Y%m%d")
+    date_str = datetime.utcnow().strftime("%Y%m%d")
     unique = str(uuid.uuid4()).split("-")[0].upper()
     return f"ORD-{date_str}-{unique}"
 
