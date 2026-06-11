@@ -5,8 +5,9 @@ from functools import wraps
 from flask import request, jsonify, g
 from models.user import *
 from models.admin import *
-import jwt, os, uuid, datetime, threading
+import jwt, os, uuid, threading
 from werkzeug.utils import secure_filename
+from datetime import datetime, timezone
 
 load_dotenv()
 
@@ -125,7 +126,7 @@ def upload_file(files, folder="uploads"):
 
 
 def generate_order_id():
-    date_str = datetime.utcnow().strftime("%Y%m%d")
+    date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
     unique = str(uuid.uuid4()).split("-")[0].upper()
     return f"ORD-{date_str}-{unique}"
 
