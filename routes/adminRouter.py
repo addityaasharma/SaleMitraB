@@ -71,18 +71,16 @@ def signup():
 
 @adminBP.route("/login", methods=["POST"])
 def login():
-    data = request.get_json()
     try:
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({"status": "error", "message": "Invalid JSON body"}), 400
+
         username = data.get("username")
         password = data.get("password")
 
         if not username or not password:
-            return (
-                jsonify(
-                    {"status": "error", "message": "Username and password are required"}
-                ),
-                400,
-            )
+            return jsonify({"status": "error", "message": "Username and password are required"}), 400
 
         admin = Admin.query.filter_by(username=username).first()
         if not admin or not check_password_hash(admin.password, password):
@@ -93,36 +91,28 @@ def login():
                 "id": admin.id,
                 "username": admin.username,
                 "role": admin.role,
-                "exp": datetime.utcnow() + timedelta(days=7),
+                "exp": datetime.now(timezone.utc) + timedelta(days=7),
             },
             os.getenv("SECRET_KEY"),
             algorithm="HS256",
         )
 
-        return (
-            jsonify(
-                {
-                    "status": "success",
-                    "message": "Login successful",
-                    "token": token,
-                    "admin": {
-                        "id": admin.id,
-                        "username": admin.username,
-                        "role": admin.role,
-                        "profile_picture": admin.profile_picture,
-                        "phone_number": admin.phone_number,
-                        "bio": admin.bio,
-                    },
-                }
-            ),
-            200,
-        )
+        return jsonify({
+            "status": "success",
+            "message": "Login successful",
+            "token": token,
+            "admin": {
+                "id": admin.id,
+                "username": admin.username,
+                "role": admin.role,
+                "profile_picture": admin.profile_picture,
+                "phone_number": admin.phone_number,
+                "bio": admin.bio,
+            },
+        }), 200
 
     except Exception as e:
-        return (
-            jsonify({"status": "error", "message": "Failed to login", "error": str(e)}),
-            500,
-        )
+        return jsonify({"status": "error", "message": "Failed to login", "error": str(e)}), 500
 
 
 @adminBP.route("/logout", methods=["POST"])

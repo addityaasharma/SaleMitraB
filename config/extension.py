@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 from celery import Celery
 import razorpay
 
-
 load_dotenv()
 
 db = SQLAlchemy()
