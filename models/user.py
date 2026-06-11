@@ -100,6 +100,7 @@ class Orders(db.Model):
     shipping_address = db.Column(db.JSON, nullable=False)
     subtotal = db.Column(db.Float, nullable=False)
     tax_amount = db.Column(db.Float, nullable=True, default=0)
+    razorpay_order_id = db.Column(db.String(255), nullable=True)
     discount = db.Column(db.Float, nullable=True, default=0)
     shipping_charges = db.Column(db.Float, nullable=False, default=0)
     total_price = db.Column(db.Float, nullable=False)
