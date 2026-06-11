@@ -1,13 +1,18 @@
-import random, secrets, os
-from dotenv import load_dotenv
-from config.extension import resend, s3
+import os
+import jwt
+import uuid
+import random
+import secrets
+import threading
 from functools import wraps
+from datetime import datetime, timezone
 from flask import request, jsonify, g
+from werkzeug.utils import secure_filename
+from dotenv import load_dotenv
+import resend
+from config.extension import s3
 from models.user import *
 from models.admin import *
-import jwt, os, uuid, threading
-from werkzeug.utils import secure_filename
-from datetime import datetime, timezone
 
 load_dotenv()
 
@@ -15,10 +20,6 @@ load_dotenv()
 def generateOTP_function():
     return str(secrets.randbelow(900000) + 100000)
 
-
-import os
-import threading
-import resend
 
 
 def _send_otp(email, otp):

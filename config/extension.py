@@ -24,7 +24,7 @@ cors = CORS(resources={r"/*": {
     "expose_headers": ["Authorization"]
 }})
 limiter = Limiter(
-    key_func=get_remote_address, default_limits=["200 per day", "50 per hour"]
+    key_func=get_remote_address, default_limits=["2000 per day", "200 per hour"]
 )
 redis = redis.Redis.from_url(os.getenv("REDIS_URL"), decode_responses=True)
 resend.api_key = os.getenv("RESEND_API_KEY")
