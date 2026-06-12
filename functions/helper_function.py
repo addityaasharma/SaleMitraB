@@ -3,6 +3,7 @@ import jwt
 import uuid
 import random
 import secrets
+import requests
 import threading
 from functools import wraps
 from datetime import datetime, timezone
@@ -15,11 +16,11 @@ from models.user import *
 from models.admin import *
 
 load_dotenv()
+SHIPROCKET_BASE = "https://apiv2.shiprocket.in/v1/external"
 
 
 def generateOTP_function():
     return str(secrets.randbelow(900000) + 100000)
-
 
 
 def _send_otp(email, otp):
@@ -45,6 +46,42 @@ def _send_otp(email, otp):
         )
     except Exception as e:
         print(f"[mailer] OTP send failed to {email}: {e}")
+
+
+def _create_shiprocket_shipment(order_id):
+    try:
+        order = Orders.query.filter_by(order_id=order_id).first()
+        if not order:
+            print(f"[shiprocket] Order {order_id} not found")
+            return
+        user = db.session.get(User, order.user_id)
+        if not user:
+            print(f"[shiprocket] User not found for order {order_id}")
+            return
+
+        sr_data, sr_error = create_shiprocket_order(order, user)
+        if sr_data:
+            order.shiprocket_order_id = str(sr_data["shiprocket_order_id"])
+            order.shipment_id = str(sr_data["shipment_id"])
+            order.tracking_url = (
+                f"https://shiprocket.co/tracking/{sr_data['shipment_id']}"
+            )
+            db.session.commit()
+            print(
+                f"[shiprocket] Shipment created for {order_id}: {sr_data['shipment_id']}"
+            )
+        else:
+            print(f"[shiprocket] Error for {order_id}: {sr_error}")
+
+    except Exception as e:
+        print(f"[shiprocket] Exception for {order_id}: {str(e)}")
+
+
+def create_shipment_async(order_id):
+    thread = threading.Thread(
+        target=_create_shiprocket_shipment, args=(order_id,), daemon=True
+    )
+    thread.start()
 
 
 def sendMail_function(email, otp):
@@ -152,3 +189,109 @@ def to_int(val, default=None):
         return int(val) if val not in (None, "") else default
     except (ValueError, TypeError):
         return default
+
+
+def get_shiprocket_token():
+    res = requests.post(
+        f"{SHIPROCKET_BASE}/auth/login",
+        json={
+            "email": os.getenv("SHIPROCKET_EMAIL"),
+            "password": os.getenv("SHIPROCKET_PASSWORD"),
+        },
+    )
+    if res.status_code == 200:
+        return res.json().get("token")
+    return None
+
+
+def create_shiprocket_order(order, user):
+    token = get_shiprocket_token()
+    if not token:
+        return None, "Failed to authenticate with Shiprocket"
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    addr = order.shipping_address  # your JSON field
+
+    order_items = []
+    for item in order.ordered_items:
+        order_items.append(
+            {
+                "name": item.product_name,
+                "sku": item.product_sku,
+                "units": item.quantity,
+                "selling_price": str(item.unit_price),
+                "discount": "0",
+                "tax": str(item.tax_amount or 0),
+            }
+        )
+
+    payload = {
+        "order_id": order.order_id,
+        "order_date": order.created_at.strftime("%Y-%m-%d %H:%M"),
+        "pickup_location": "Primary",  # name of your pickup location in Shiprocket
+        "channel_id": os.getenv("SHIPROCKET_CHANNEL_ID", ""),
+        "billing_customer_name": user.username,
+        "billing_last_name": "",
+        "billing_address": addr.get("street", ""),
+        "billing_city": addr.get("city", ""),
+        "billing_pincode": addr.get("postal_code", ""),
+        "billing_state": addr.get("state", ""),
+        "billing_country": addr.get("country", "India"),
+        "billing_email": user.email,
+        "billing_phone": user.phone_number or "9999999999",
+        "shipping_is_billing": True,
+        "order_items": order_items,
+        "payment_method": "Prepaid" if order.payment_method == "razorpay" else "COD",
+        "sub_total": str(order.subtotal),
+        "length": 10,  # cm — update per product
+        "breadth": 10,
+        "height": 10,
+        "weight": 0.5,  # kg — update per product
+    }
+
+    res = requests.post(
+        f"{SHIPROCKET_BASE}/orders/create/adhoc", json=payload, headers=headers
+    )
+
+    if res.status_code in [200, 201]:
+        data = res.json()
+        return {
+            "shiprocket_order_id": data.get("order_id"),
+            "shipment_id": data.get("shipment_id"),
+        }, None
+    else:
+        return None, res.json().get("message", "Shiprocket order creation failed")
+
+
+def get_tracking(shipment_id):
+    token = get_shiprocket_token()
+    if not token:
+        return None
+
+    res = requests.get(
+        f"{SHIPROCKET_BASE}/courier/track/shipment/{shipment_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if res.status_code == 200:
+        return res.json()
+    return None
+
+
+def cancel_shiprocket_order(shiprocket_order_id):
+    token = get_shiprocket_token()
+    if not token:
+        return False
+
+    res = requests.post(
+        f"{SHIPROCKET_BASE}/orders/cancel",
+        json={"ids": [shiprocket_order_id]},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    return res.status_code == 200

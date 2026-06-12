@@ -108,6 +108,10 @@ class Orders(db.Model):
     status = db.Column(db.String(50), nullable=False, default="pending")
     payment_method = db.Column(db.String(50), nullable=False)
     payment_status = db.Column(db.String(50), nullable=False, default="unpaid")
+    shiprocket_order_id = db.Column(db.String(100), nullable=True)
+    shipment_id = db.Column(db.String(100), nullable=True)
+    tracking_url = db.Column(db.String(500), nullable=True)
+    awb_code = db.Column(db.String(100), nullable=True)
     created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
     updated_at = db.Column(
         db.DateTime,

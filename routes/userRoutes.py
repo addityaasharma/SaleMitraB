@@ -78,7 +78,7 @@ def verify_otp():
                 400,
             )
 
-        user_data = redis_client.get(f"otp:{data.get('email')}")
+        user_data = redis.get(f"otp:{data.get('email')}")
         if not user_data:
             return jsonify({"status": "error", "message": "OTP expired"}), 404
 
@@ -95,7 +95,7 @@ def verify_otp():
         )
         db.session.add(new_user)
         db.session.commit()
-        redis_client.delete(f"otp:{data['email']}")
+        redis.delete(f"otp:{data['email']}")
 
         token = jwt.encode(
             {
@@ -1174,7 +1174,6 @@ def create_order():
             "country": address.country,
         }
 
-        # ── Build raw items ───────────────────────────────────────────────────
         order_items_raw = []
 
         if data["order_source"] == "buy_now":
@@ -1223,7 +1222,6 @@ def create_order():
                     }
                 )
 
-        # ── Validate & compute totals ─────────────────────────────────────────
         ordered_items_data = []
         subtotal = 0
         total_tax = 0
@@ -1305,7 +1303,6 @@ def create_order():
             subtotal + total_tax + shipping_charges - coupon_discount, 2
         )
 
-        # ── Create order ──────────────────────────────────────────────────────
         new_order = Orders(
             user_id=user.id,
             order_id=generate_order_id(),
@@ -1324,7 +1321,6 @@ def create_order():
         db.session.add(new_order)
         db.session.flush()
 
-        # ── Create ordered items ──────────────────────────────────────────────
         for item in ordered_items_data:
             db.session.add(
                 OrderedItems(
@@ -1342,7 +1338,6 @@ def create_order():
                 )
             )
 
-        # ── COD ───────────────────────────────────────────────────────────────
         if data["payment_method"] == "cod":
             db.session.add(
                 Payment(
@@ -1365,6 +1360,8 @@ def create_order():
 
             new_order.status = "confirmed"
             db.session.commit()
+            
+            
 
             return (
                 jsonify(
@@ -1382,7 +1379,6 @@ def create_order():
                 201,
             )
 
-        # ── Razorpay ──────────────────────────────────────────────────────────
         elif data["payment_method"] == "razorpay":
             razorpay_order = razorpay_client.order.create(
                 {
@@ -1407,6 +1403,7 @@ def create_order():
                 )
             )
             db.session.commit()
+            create_shipment_async(new_order.order_id)
 
             return (
                 jsonify(
@@ -1492,7 +1489,6 @@ def verify_razorpay_payment():
                 200,
             )
 
-        # ── Verify signature ──────────────────────────────────────────────────
         body = f"{data['razorpay_order_id']}|{data['razorpay_payment_id']}"
         expected_signature = hmac.new(
             os.getenv("RAZORPAY_KEY_SECRET").encode(), body.encode(), hashlib.sha256
@@ -1508,28 +1504,25 @@ def verify_razorpay_payment():
                 400,
             )
 
-        # ── Update payment ────────────────────────────────────────────────────
         payment.status = "success"
         payment.razorpay_payment_id = data["razorpay_payment_id"]
         payment.razorpay_signature = data["razorpay_signature"]
         payment.paid_at = datetime.now(timezone.utc)
 
-        # ── Update order ──────────────────────────────────────────────────────
         order.status = "confirmed"
         order.payment_status = "paid"
 
-        # ── Deduct stock ──────────────────────────────────────────────────────
         ordered_items = OrderedItems.query.filter_by(order_id=order.id).all()
         for item in ordered_items:
             product = db.session.get(Products, item.product_id)
             if product:
                 product.stock -= item.quantity
 
-        # ── Clear cart ────────────────────────────────────────────────────────
         if order.order_source == "cart":
             Cart.query.filter_by(user_id=user.id).delete()
 
         db.session.commit()
+        create_shipment_async(order.order_id)
 
         return (
             jsonify(
@@ -1627,6 +1620,13 @@ def get_order(order_id):
 
         payment = Payment.query.filter_by(order_id=order.id).first()
 
+        tracking_data = None
+        if order.shipment_id:
+            try:
+                tracking_data = get_tracking(order.shipment_id)
+            except Exception:
+                pass  # tracking failure must never break order fetch
+
         return (
             jsonify(
                 {
@@ -1670,6 +1670,13 @@ def get_order(order_id):
                             }
                             for item in order.ordered_items
                         ],
+                        "tracking": {
+                            "available": order.shipment_id is not None,
+                            "shipment_id": order.shipment_id,
+                            "awb_code": order.awb_code,
+                            "tracking_url": order.tracking_url,
+                            "details": tracking_data,
+                        },
                         "created_at": order.created_at,
                         "updated_at": order.updated_at,
                     },
@@ -1755,6 +1762,48 @@ def cancel_order(order_id):
             ),
             500,
         )
+
+
+@userBP.route("/webhook/shiprocket", methods=["POST"])
+def shiprocket_webhook():
+    try:
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({"status": "error"}), 400
+
+        awb = data.get("awb")
+        sr_status = data.get("current_status", "").lower()
+        shipment_id = data.get("shipment_id")
+
+        order = Orders.query.filter_by(shipment_id=str(shipment_id)).first()
+        if not order:
+            return jsonify({"status": "ok"}), 200
+
+        # map Shiprocket status to your status
+        status_map = {
+            "pickup scheduled": "processing",
+            "picked up": "processing",
+            "in transit": "shipped",
+            "out for delivery": "out_for_delivery",
+            "delivered": "delivered",
+            "rto initiated": "returned",
+            "returned": "returned",
+            "cancelled": "cancelled",
+        }
+
+        new_status = status_map.get(sr_status)
+        if new_status:
+            order.status = new_status
+
+        if awb:
+            order.awb_code = awb
+
+        db.session.commit()
+        return jsonify({"status": "ok"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 @userBP.route("/me/order/<string:order_id>/refund", methods=["POST"])
@@ -2125,7 +2174,6 @@ def get_products():
         if barcode:
             query = query.filter(Products.barcode == barcode)
 
-        # ── Special filters ───────────────────────────────────────────────────
         special = request.args.get(
             "filter"
         )  # trending | new_arrivals | best_sellers | top_picks
