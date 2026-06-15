@@ -269,7 +269,7 @@ def reset_password():
         if not stored_otp:
             return jsonify({"status": "error", "message": "OTP expired"}), 400
 
-        if data.get("otp") != stored_otp.decode():
+        if data.get("otp") != stored_otp:
             return jsonify({"status": "error", "message": "Invalid OTP"}), 400
 
         check_user.password = generate_password_hash(data.get("password"))
