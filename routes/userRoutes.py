@@ -265,16 +265,16 @@ def reset_password():
                 404,
             )
 
-        stored_otp = redis.get(f"reset_otp:{data.get('email')}")
+        stored_otp = redis.get(f"otp:{data.get('email')}")
         if not stored_otp:
             return jsonify({"status": "error", "message": "OTP expired"}), 400
 
-        if data.get("otp") != stored_otp:
+        if data.get("otp") != stored_otp.decode():
             return jsonify({"status": "error", "message": "Invalid OTP"}), 400
 
         check_user.password = generate_password_hash(data.get("password"))
         db.session.commit()
-        redis.delete(f"reset_otp:{data.get('email')}")
+        redis.delete(f"otp:{data.get('email')}")
 
         return (
             jsonify({"status": "success", "message": "Password reset successfully"}),
@@ -1360,8 +1360,6 @@ def create_order():
 
             new_order.status = "confirmed"
             db.session.commit()
-            
-            
 
             return (
                 jsonify(
