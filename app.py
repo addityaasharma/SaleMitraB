@@ -18,9 +18,12 @@ limiter.init_app(app)
 
 from routes.adminRouter import *
 from routes.userRoutes import *
+from routes.supportRoutes import *
+
 
 app.register_blueprint(userBP)
 app.register_blueprint(adminBP)
+app.register_blueprint(supportBP)
 
 with app.app_context():
     db.create_all()

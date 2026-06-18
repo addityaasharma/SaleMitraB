@@ -406,7 +406,7 @@ def add_address():
 
         data = request.get_json()
         if not data:
-            return jsonify({"status": "error", "message": "No data provided"}), 400
+            return jsonify({"status": "success", "message": "No data provided"}), 200
 
         required_fields = ["street", "city", "state", "postal_code", "country"]
         missing_fields = [field for field in required_fields if not data.get(field)]
@@ -414,11 +414,11 @@ def add_address():
             return (
                 jsonify(
                     {
-                        "status": "error",
+                        "status": "success",
                         "message": f"Missing required fields: {', '.join(missing_fields)}",
                     }
                 ),
-                400,
+                200,
             )
 
         new_address = Address(
@@ -507,11 +507,11 @@ def update_address(address_id):
         user = g.user
         address = Address.query.filter_by(id=address_id, user_id=user.id).first()
         if not address:
-            return jsonify({"status": "error", "message": "Address not found"}), 404
+            return jsonify({"status": "success", "message": "Address not found"}), 200
 
         data = request.get_json()
         if not data:
-            return jsonify({"status": "error", "message": "No data provided"}), 400
+            return jsonify({"status": "success", "message": "No data provided"}), 200
 
         updatable_fields = ["street", "city", "state", "postal_code", "country"]
         for field in updatable_fields:
@@ -556,7 +556,7 @@ def delete_address(address_id):
         user = g.user
         address = Address.query.filter_by(id=address_id, user_id=user.id).first()
         if not address:
-            return jsonify({"status": "error", "message": "Address not found"}), 404
+            return jsonify({"status": "error", "message": "Address not found"}), 200
 
         db.session.delete(address)
         db.session.commit()
@@ -694,7 +694,7 @@ def add_to_cart():
         user = g.user
         data = request.get_json()
         if not data:
-            return jsonify({"status": "error", "message": "No data provided"}), 400
+            return jsonify({"status": "error", "message": "No data provided"}), 200
 
         required_fields = ["product_id", "quantity"]
         missing_fields = [field for field in required_fields if not data.get(field)]
@@ -706,7 +706,7 @@ def add_to_cart():
                         "message": f"Missing required fields: {', '.join(missing_fields)}",
                     }
                 ),
-                400,
+                200,
             )
 
         if data["quantity"] < 1:
@@ -717,12 +717,12 @@ def add_to_cart():
 
         product = Products.query.get(data["product_id"])
         if not product:
-            return jsonify({"status": "error", "message": "Product not found"}), 404
+            return jsonify({"status": "error", "message": "Product not found"}), 200
 
         if product.status != "active":
             return (
                 jsonify({"status": "error", "message": "Product is not available"}),
-                400,
+                200,
             )
 
         if not product.sell_when_out_of_stock and product.stock < data["quantity"]:
@@ -733,7 +733,7 @@ def add_to_cart():
                         "message": f"Insufficient stock. Only {product.stock} items available",
                     }
                 ),
-                400,
+                200,
             )
 
         existing_item = Cart.query.filter_by(
@@ -812,11 +812,11 @@ def update_cart(cart_id):
         user = g.user
         cart_item = Cart.query.filter_by(id=cart_id, user_id=user.id).first()
         if not cart_item:
-            return jsonify({"status": "error", "message": "Cart item not found"}), 404
+            return jsonify({"status": "error", "message": "Cart item not found"}), 200
 
         data = request.get_json()
         if not data or "quantity" not in data:
-            return jsonify({"status": "error", "message": "Quantity is required"}), 400
+            return jsonify({"status": "error", "message": "Quantity is required"}), 200
 
         if data["quantity"] < 1:
             return (
@@ -826,7 +826,7 @@ def update_cart(cart_id):
 
         product = Products.query.get(cart_item.product_id)
         if not product:
-            return jsonify({"status": "error", "message": "Product not found"}), 404
+            return jsonify({"status": "error", "message": "Product not found"}), 200
 
         if not product.sell_when_out_of_stock and data["quantity"] > product.stock:
             return (
@@ -836,7 +836,7 @@ def update_cart(cart_id):
                         "message": f"Insufficient stock. Only {product.stock} items available",
                     }
                 ),
-                400,
+                200,
             )
 
         cart_item.quantity = data["quantity"]
@@ -875,7 +875,7 @@ def delete_cart_item(cart_id):
         user = g.user
         cart_item = Cart.query.filter_by(id=cart_id, user_id=user.id).first()
         if not cart_item:
-            return jsonify({"status": "error", "message": "Cart item not found"}), 404
+            return jsonify({"status": "error", "message": "Cart item not found"}), 200
 
         db.session.delete(cart_item)
         db.session.commit()
@@ -1012,12 +1012,12 @@ def add_to_wishlist():
         if not data or not data.get("product_id"):
             return (
                 jsonify({"status": "error", "message": "product_id is required"}),
-                400,
+                200,
             )
 
         product = Products.query.get(data["product_id"])
         if not product:
-            return jsonify({"status": "error", "message": "Product not found"}), 404
+            return jsonify({"status": "error", "message": "Product not found"}), 200
 
         existing = WishList.query.filter_by(
             user_id=user.id, product_id=data["product_id"]

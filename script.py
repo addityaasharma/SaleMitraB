@@ -1,7 +1,6 @@
-import random, secrets
+from app import app
+from config.extension import db
+import models.support  # registers SupportConversation / SupportMessage
 
-def generateOTP_function():
-    return str(secrets.randbelow(900000)+100000)
-
-otp = generateOTP_function
-print(otp)
+with app.app_context():
+    db.create_all()

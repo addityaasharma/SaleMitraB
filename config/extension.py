@@ -21,7 +21,7 @@ cors = CORS(resources={r"/*": {
     "allow_headers": ["Authorization", "Content-Type"],
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     "expose_headers": ["Authorization"]
-}})
+}}) 
 limiter = Limiter(
     key_func=get_remote_address, default_limits=["2000 per day", "200 per hour"]
 )
