@@ -21,24 +21,31 @@ def conversation_room(conversation_id):
 
 
 def authenticate(auth):
+    print("AUTH PAYLOAD RECEIVED:", auth)
     if not auth or "token" not in auth or "role" not in auth:
+        print("AUTH FAILED: missing auth/token/role")
         return None
 
     try:
         decoded = jwt.decode(
             auth["token"], os.getenv("SECRET_KEY"), algorithms=["HS256"]
         )
+        print("DECODED TOKEN:", decoded)
     except jwt.ExpiredSignatureError:
+        print("AUTH FAILED: token expired")
         return None
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as e:
+        print("AUTH FAILED: invalid token:", str(e))
         return None
 
     if auth["role"] == "admin":
         admin = Admin.query.get(decoded.get("id"))
+        print("ADMIN LOOKUP:", admin)
         return {"role": "admin", "id": admin.id} if admin else None
 
     if auth["role"] == "user":
         user = User.query.get(decoded.get("userID"))
+        print("USER LOOKUP:", user)
         return {"role": "user", "id": user.id} if user else None
 
     return None
