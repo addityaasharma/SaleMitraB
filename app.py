@@ -1,5 +1,4 @@
 from gevent import monkey
-
 monkey.patch_all()
 
 from config.extension import *
@@ -25,15 +24,9 @@ app.register_blueprint(userBP)
 app.register_blueprint(adminBP)
 app.register_blueprint(supportBP)
 
-@app.route('/', methods=["GET"])
-def check_server():
-    try:
-        return "Running  :)"
-    except Exception as e:
-        return jsonify({"status" : False , "message"  : str(e)}), 500
-
 with app.app_context():
     db.create_all()
 
 if __name__ == "__main__":
     socketio.run(app, debug=False, use_reloader=False)
+    # socketio.run(app, debug=True)
