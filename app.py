@@ -4,6 +4,7 @@ monkey.patch_all()
 from config.extension import *
 from config.settings import BaseConfig
 from flask import Flask
+from functions.helper_function import *
 
 app = Flask(__name__)
 app.config.from_object(BaseConfig)
@@ -14,6 +15,7 @@ jwt.init_app(app)
 socketio.init_app(app, async_mode="gevent")
 cors.init_app(app)
 limiter.init_app(app)
+init_oauth(app)
 
 from routes.adminRouter import *
 from routes.userRoutes import *

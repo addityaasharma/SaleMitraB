@@ -9,6 +9,8 @@ import redis, os, resend, boto3
 from dotenv import load_dotenv
 from celery import Celery
 import razorpay
+from authlib.integrations.flask_client import OAuth
+
 
 load_dotenv()
 
@@ -38,3 +40,4 @@ s3 = boto3.client(
 razorpay_client = razorpay.Client(
     auth=(os.getenv("RAZORPAY_KEY_ID"), os.getenv("RAZORPAY_KEY_SECRET"))
 )
+oauth = OAuth()

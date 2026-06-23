@@ -11,7 +11,7 @@ from flask import request, jsonify, g
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import resend
-from config.extension import s3
+from config.extension import *
 from models.user import *
 from models.admin import *
 
@@ -295,3 +295,14 @@ def cancel_shiprocket_order(shiprocket_order_id):
         },
     )
     return res.status_code == 200
+
+
+def init_oauth(app):
+    oauth.init_app(app)
+    oauth.register(
+        name="google",
+        client_id=os.getenv("GOOGLE_CLIENT_ID"),
+        client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )

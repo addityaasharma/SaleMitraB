@@ -7,6 +7,7 @@ class User(db.Model):
     username = db.Column(db.String(255), unique=True, nullable=False)
     email = db.Column(db.String(255), unique=True, nullable=False)
     password = db.Column(db.String(255), nullable=False)
+    google_id = db.Column(db.String(128), unique=True, nullable=True)
     profile_picture = db.Column(db.String(255), nullable=True)
     phone_number = db.Column(db.String(20), nullable=True)
     bio = db.Column(db.Text, nullable=True)

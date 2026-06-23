@@ -1,6 +1,6 @@
 from models.user import *
 from models.admin import *
-from flask import request, jsonify, Blueprint, g
+from flask import request, jsonify, Blueprint, g, session, redirect, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
 from config.extension import *
 from functions.helper_function import *
@@ -195,6 +195,79 @@ def login():
             jsonify({"status": "error", "message": "Failed to login", "error": str(e)}),
             500,
         )
+
+
+@userBP.route("/login/google")
+def google_auth():
+    session["oauth_intent"] = request.args.get("intent", "login")
+    redirect_uri = url_for("userBP.google_callback", _external=True)
+    return oauth.google.authorize_redirect(redirect_uri)
+
+
+@userBP.route("/auth/google/callback")
+def google_callback():
+    frontend = os.getenv("FRONTEND_URL")
+    try:
+        token = oauth.google.authorize_access_token()
+        user_info = token.get("userinfo")
+        intent = session.pop("oauth_intent", "login")
+
+        if not user_info or not user_info.get("email"):
+            return redirect(f"{frontend}/login?error=google_failed")
+
+        email = user_info["email"]
+        google_id = user_info["sub"]
+        picture = user_info.get("picture")
+        name = user_info.get("name", email.split("@")[0])
+
+        user = User.query.filter(
+            (User.google_id == google_id) | (User.email == email)
+        ).first()
+
+        if user:
+            if not user.google_id:
+                user.google_id = google_id
+                db.session.commit()
+
+            jwt_token = jwt.encode(
+                {
+                    "userID": user.id,
+                    "role": user.role,
+                    "exp": datetime.utcnow() + timedelta(days=7),
+                },
+                os.getenv("SECRET_KEY"),
+                algorithm="HS256",
+            )
+            return redirect(f"{frontend}/auth/callback?token={jwt_token}")
+
+        if intent == "login":
+            return redirect(f"{frontend}/login?error=no_account")
+
+        new_user = User(
+            email=email,
+            username=name,
+            password=None,
+            google_id=google_id,
+            role="user",
+            profile_picture=picture,
+        )
+        db.session.add(new_user)
+        db.session.commit()
+
+        jwt_token = jwt.encode(
+            {
+                "userID": new_user.id,
+                "role": new_user.role,
+                "exp": datetime.utcnow() + timedelta(days=7),
+            },
+            os.getenv("SECRET_KEY"),
+            algorithm="HS256",
+        )
+        return redirect(f"{frontend}/auth/callback?token={jwt_token}")
+
+    except Exception as e:
+        db.session.rollback()
+        return redirect(f"{frontend}/login?error=server_error")
 
 
 @userBP.route("/logout", methods=["POST"])
