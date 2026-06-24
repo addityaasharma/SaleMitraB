@@ -1482,8 +1482,7 @@ def create_order():
                 )
             )
             db.session.commit()
-            create_shipment_async(new_order.order_id)
-
+            
             return (
                 jsonify(
                     {
