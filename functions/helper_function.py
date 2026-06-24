@@ -11,7 +11,7 @@ from flask import request, jsonify, g
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import resend
-from config.extension import *
+from config.extension import s3, oauth
 from models.user import *
 from models.admin import *
 
@@ -199,6 +199,8 @@ def get_shiprocket_token():
             "password": os.getenv("SHIPROCKET_PASSWORD"),
         },
     )
+    print("SHIPROCKET LOGIN:", res.status_code)
+    print("SHIPROCKET RESPONSE:", res.text)
     if res.status_code == 200:
         return res.json().get("token")
     return None

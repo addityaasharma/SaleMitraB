@@ -4,13 +4,26 @@ monkey.patch_all()
 from config.extension import *
 from config.settings import BaseConfig
 from flask import Flask
-from functions.helper_function import *
+from functions.helper_function import init_oauth
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
 app.config.from_object(BaseConfig)
 
+app.wsgi_app = ProxyFix(
+    app.wsgi_app,
+    x_for=1,
+    x_proto=1,
+    x_host=1
+)
+
+app.config["SESSION_COOKIE_SECURE"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "None"
+
 db.init_app(app)
 migrate.init_app(app, db)
+print("JWT OBJECT:", jwt)
+print("JWT TYPE:", type(jwt))
 jwt.init_app(app)
 socketio.init_app(app, async_mode="gevent")
 cors.init_app(app)

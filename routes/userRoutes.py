@@ -200,7 +200,12 @@ def login():
 @userBP.route("/login/google")
 def google_auth():
     session["oauth_intent"] = request.args.get("intent", "login")
-    redirect_uri = url_for("userBP.google_callback", _external=True)
+    session["test"] = "hello"
+    redirect_uri = url_for(
+        "user.google_callback",
+        _external=True,
+        _scheme="https"
+    )
     return oauth.google.authorize_redirect(redirect_uri)
 
 
@@ -267,7 +272,8 @@ def google_callback():
 
     except Exception as e:
         db.session.rollback()
-        return redirect(f"{frontend}/login?error=server_error")
+        print("GOOGLE CALLBACK ERROR:", str(e))
+        raise e
 
 
 @userBP.route("/logout", methods=["POST"])
