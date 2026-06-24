@@ -1439,7 +1439,9 @@ def create_order():
 
             new_order.status = "confirmed"
             db.session.commit()
-
+            db.session.commit()
+            create_shipment_async(new_order.order_id)
+            
             return (
                 jsonify(
                     {
