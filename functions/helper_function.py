@@ -176,6 +176,176 @@ def _send_otp(email: str, otp: str):
         print(f"[mailer] OTP send failed to {email}: {exc}")
 
 
+def _send_order_confirmation(email: str, username: str, order):
+    try:
+        items_html = ""
+        for item in order.ordered_items:
+            items_html += f"""
+            <tr>
+                <td style="padding:10px 8px;border-bottom:1px solid #f0f0f0;">
+                    <span style="font-size:14px;color:#000;font-weight:500;">{item.product_name}</span><br>
+                    <span style="font-size:12px;color:#999;">SKU: {item.product_sku or "N/A"}</span>
+                </td>
+                <td style="padding:10px 8px;border-bottom:1px solid #f0f0f0;text-align:center;
+                            font-size:14px;color:#555;">x{item.quantity}</td>
+                <td style="padding:10px 8px;border-bottom:1px solid #f0f0f0;text-align:right;
+                            font-size:14px;color:#000;font-weight:500;">
+                    ₹{item.total_price:,.2f}
+                </td>
+            </tr>
+            """
+
+        # Payment method label
+        payment_label = (
+            "Cash on Delivery"
+            if order.payment_method == "cod"
+            else "Online Payment (Razorpay)"
+        )
+
+        # Shipping address
+        addr = order.shipping_address or {}
+        address_line = ", ".join(
+            filter(
+                None,
+                [
+                    addr.get("street"),
+                    addr.get("city"),
+                    addr.get("state"),
+                    addr.get("postal_code"),
+                    addr.get("country"),
+                ],
+            )
+        )
+
+        resend.Emails.send(
+            {
+                "from": os.getenv("EMAIL_FROM"),
+                "to": [email],
+                "subject": f"Order Confirmed – {order.order_id} | SaleMitra",
+                "html": f"""
+            <div style="font-family:sans-serif;max-width:560px;margin:auto;padding:32px;
+                        background:#fff;border-radius:16px;border:1px solid #eee;">
+
+                <!-- Header -->
+                <div style="text-align:center;margin-bottom:28px;">
+                    <div style="display:inline-block;background:#000;border-radius:50%;
+                                width:52px;height:52px;line-height:52px;text-align:center;
+                                margin-bottom:12px;">
+                        <span style="font-size:26px;">✓</span>
+                    </div>
+                    <h2 style="font-size:22px;font-weight:700;color:#000;margin:0;">
+                        Order Confirmed!</h2>
+                    <p style="color:#666;font-size:14px;margin:6px 0 0;">
+                        Hi {username}, your order has been placed successfully.</p>
+                </div>
+
+                <!-- Order Meta -->
+                <div style="background:#f9f9f9;border-radius:12px;padding:16px 20px;
+                            margin-bottom:24px;">
+                    <table width="100%" cellpadding="0" cellspacing="0">
+                        <tr>
+                            <td style="font-size:13px;color:#999;padding:4px 0;">Order ID</td>
+                            <td style="font-size:13px;color:#000;font-weight:600;
+                                        text-align:right;padding:4px 0;">
+                                {order.order_id}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="font-size:13px;color:#999;padding:4px 0;">Payment</td>
+                            <td style="font-size:13px;color:#000;text-align:right;padding:4px 0;">
+                                {payment_label}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="font-size:13px;color:#999;padding:4px 0;">Delivering to</td>
+                            <td style="font-size:13px;color:#000;text-align:right;
+                                        padding:4px 0;max-width:220px;">
+                                {address_line}
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Items Table -->
+                <table width="100%" cellpadding="0" cellspacing="0"
+                       style="margin-bottom:20px;">
+                    <thead>
+                        <tr style="background:#f5f5f5;">
+                            <th style="padding:10px 8px;text-align:left;font-size:12px;
+                                       color:#999;font-weight:600;text-transform:uppercase;">
+                                Item</th>
+                            <th style="padding:10px 8px;text-align:center;font-size:12px;
+                                       color:#999;font-weight:600;text-transform:uppercase;">
+                                Qty</th>
+                            <th style="padding:10px 8px;text-align:right;font-size:12px;
+                                       color:#999;font-weight:600;text-transform:uppercase;">
+                                Price</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {items_html}
+                    </tbody>
+                </table>
+
+                <!-- Price Breakdown -->
+                <div style="border-top:2px solid #f0f0f0;padding-top:16px;margin-bottom:24px;">
+                    <table width="100%" cellpadding="0" cellspacing="0">
+                        <tr>
+                            <td style="font-size:13px;color:#999;padding:3px 0;">Subtotal</td>
+                            <td style="font-size:13px;color:#555;text-align:right;padding:3px 0;">
+                                ₹{order.subtotal:,.2f}</td>
+                        </tr>
+                        <tr>
+                            <td style="font-size:13px;color:#999;padding:3px 0;">Tax</td>
+                            <td style="font-size:13px;color:#555;text-align:right;padding:3px 0;">
+                                ₹{order.tax_amount:,.2f}</td>
+                        </tr>
+                        <tr>
+                            <td style="font-size:13px;color:#999;padding:3px 0;">Shipping</td>
+                            <td style="font-size:13px;color:#555;text-align:right;padding:3px 0;">
+                                ₹{order.shipping_charges:,.2f}</td>
+                        </tr>
+                        {"" if order.discount == 0 else f'''
+                        <tr>
+                            <td style="font-size:13px;color:#22c55e;padding:3px 0;">Discount</td>
+                            <td style="font-size:13px;color:#22c55e;text-align:right;padding:3px 0;">
+                                -₹{order.discount:,.2f}</td>
+                        </tr>
+                        '''}
+                        <tr>
+                            <td style="font-size:15px;color:#000;font-weight:700;padding:10px 0 0;">
+                                Total</td>
+                            <td style="font-size:15px;color:#000;font-weight:700;
+                                        text-align:right;padding:10px 0 0;">
+                                ₹{order.total_price:,.2f}</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <!-- Footer note -->
+                <p style="color:#999;font-size:12px;text-align:center;margin:0;">
+                    You will receive a shipping update once your order is dispatched.<br>
+                    For support, reply to this email or contact us at SaleMitra.
+                </p>
+
+                <hr style="border:none;border-top:1px solid #eee;margin:24px 0;">
+                <p style="color:#ccc;font-size:11px;text-align:center;margin:0;">SaleMitra</p>
+            </div>
+            """,
+            }
+        )
+    except Exception as exc:
+        print(f"[mailer] Order confirmation email failed for {email}: {exc}")
+
+
+def send_order_confirmation_email(email: str, username: str, order):
+    threading.Thread(
+        target=_send_order_confirmation,
+        args=(email, username, order),
+        daemon=True,
+    ).start()
+
+
 def sendMail_function(email: str, otp: str):
     threading.Thread(target=_send_otp, args=(email, otp), daemon=True).start()
 
