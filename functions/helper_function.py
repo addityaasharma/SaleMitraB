@@ -27,10 +27,6 @@ _sr_token_lock = threading.Lock()
 
 
 def get_shiprocket_token() -> str | None:
-    """
-    Return a valid Shiprocket JWT, re-fetching only when the cached one is
-    about to expire (or has never been fetched).  Thread-safe.
-    """
     global _sr_token, _sr_token_fetched_at
 
     with _sr_token_lock:
@@ -178,6 +174,7 @@ def _send_otp(email: str, otp: str):
 
 def _send_order_confirmation(email: str, username: str, order):
     try:
+        print("Mail sending started")
         items_html = ""
         for item in order.ordered_items:
             items_html += f"""
@@ -196,6 +193,7 @@ def _send_order_confirmation(email: str, username: str, order):
             """
 
         # Payment method label
+        print("Payment started")
         payment_label = (
             "Cash on Delivery"
             if order.payment_method == "cod"
@@ -203,6 +201,7 @@ def _send_order_confirmation(email: str, username: str, order):
         )
 
         # Shipping address
+        print("Shipping ---|-|")
         addr = order.shipping_address or {}
         address_line = ", ".join(
             filter(
@@ -216,7 +215,8 @@ def _send_order_confirmation(email: str, username: str, order):
                 ],
             )
         )
-
+        
+        print("mail is sending")
         resend.Emails.send(
             {
                 "from": os.getenv("EMAIL_FROM"),
@@ -327,7 +327,6 @@ def _send_order_confirmation(email: str, username: str, order):
                     You will receive a shipping update once your order is dispatched.<br>
                     For support, reply to this email or contact us at SaleMitra.
                 </p>
-
                 <hr style="border:none;border-top:1px solid #eee;margin:24px 0;">
                 <p style="color:#ccc;font-size:11px;text-align:center;margin:0;">SaleMitra</p>
             </div>
@@ -339,6 +338,7 @@ def _send_order_confirmation(email: str, username: str, order):
 
 
 def send_order_confirmation_email(email: str, username: str, order):
+    print("threading started")
     threading.Thread(
         target=_send_order_confirmation,
         args=(email, username, order),

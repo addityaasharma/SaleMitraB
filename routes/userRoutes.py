@@ -1886,9 +1886,11 @@ def create_order():
                 _delete_cart_items(user.id, cart_item_ids_used)
 
             new_order.status = "confirmed"
-            new_order.payment_status = "paid"  # COD is treated as confirmed-paid
+            new_order.payment_status = "paid"
+            
             db.session.commit()
             create_shipment_async(new_order.order_id)
+            print("Sending started")
             send_order_confirmation_email(user.email, user.username, new_order)
             return (
                 jsonify(
