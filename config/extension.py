@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from celery import Celery
 import razorpay
 from authlib.integrations.flask_client import OAuth
+from botocore.config import Config
 
 load_dotenv()
 
