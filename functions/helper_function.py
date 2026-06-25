@@ -48,9 +48,7 @@ def get_shiprocket_token() -> str | None:
                 if res.status_code == 200:
                     _sr_token = res.json().get("token")
                     _sr_token_fetched_at = now
-                    print("[shiprocket] Token refreshed")
                 else:
-                    print(f"[shiprocket] Login failed: {res.status_code} {res.text}")
                     _sr_token = None
             except Exception as exc:
                 print(f"[shiprocket] Login exception: {exc}")
@@ -342,7 +340,6 @@ def _send_order_confirmation(
             """,
             }
         )
-        print(f"[mailer] Order confirmation sent to {email}")
 
     except Exception as exc:
         print(f"[mailer] Order confirmation failed for {email}: {exc}")
@@ -523,12 +520,10 @@ def _create_shiprocket_shipment(order_id: str):
     try:
         order = Orders.query.filter_by(order_id=order_id).first()
         if not order:
-            print(f"[shiprocket] Order {order_id} not found")
             return
 
         user = db.session.get(User, order.user_id)
         if not user:
-            print(f"[shiprocket] User not found for order {order_id}")
             return
 
         sr_data, sr_error = create_shiprocket_order(order, user)
@@ -539,10 +534,6 @@ def _create_shiprocket_shipment(order_id: str):
                 f"https://shiprocket.co/tracking/{sr_data['shipment_id']}"
             )
             db.session.commit()
-            print(
-                f"[shiprocket] Shipment created for {order_id}: "
-                f"{sr_data['shipment_id']}"
-            )
         else:
             print(f"[shiprocket] Error for {order_id}: {sr_error}")
 
@@ -551,7 +542,6 @@ def _create_shiprocket_shipment(order_id: str):
 
 
 def create_shipment_async(order_id: str):
-    print("order started for shiprocket")
     threading.Thread(
         target=_create_shiprocket_shipment,
         args=(order_id,),

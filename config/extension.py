@@ -11,19 +11,22 @@ from celery import Celery
 import razorpay
 from authlib.integrations.flask_client import OAuth
 
-
 load_dotenv()
 
 db = SQLAlchemy()
 socketio = SocketIO(cors_allowed_origins="*", async_mode="gevent")
 migrate = Migrate()
 jwt = JWTManager()
-cors = CORS(resources={r"/*": {
-    "origins": "*",
-    "allow_headers": ["Authorization", "Content-Type"],
-    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    "expose_headers": ["Authorization"]
-}}) 
+cors = CORS(
+    resources={
+        r"/*": {
+            "origins": "*",
+            "allow_headers": ["Authorization", "Content-Type"],
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "expose_headers": ["Authorization"],
+        }
+    }
+)
 limiter = Limiter(
     key_func=get_remote_address, default_limits=["2000 per day", "200 per hour"]
 )
@@ -36,6 +39,7 @@ s3 = boto3.client(
     aws_access_key_id=os.getenv("R2_ACCESS_KEY_ID"),
     aws_secret_access_key=os.getenv("R2_SECRET_ACCESS_KEY"),
     region_name="auto",
+    config=Config(signature_version="s3v4"),
 )
 razorpay_client = razorpay.Client(
     auth=(os.getenv("RAZORPAY_KEY_ID"), os.getenv("RAZORPAY_KEY_SECRET"))
