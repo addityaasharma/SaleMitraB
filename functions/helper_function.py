@@ -172,66 +172,77 @@ def _send_otp(email: str, otp: str):
         print(f"[mailer] OTP send failed to {email}: {exc}")
 
 
-def _send_order_confirmation(email: str, username: str, order):
+def _send_order_confirmation(
+    email: str,
+    username: str,
+    order_id: str,
+    order_date: str,
+    payment_method: str,
+    address_line: str,
+    items: list,  # plain dicts — safe to use in background thread
+    subtotal: float,
+    tax_amount: float,
+    shipping_charges: float,
+    discount: float,
+    total_price: float,
+):
     try:
-        print("Mail sending started")
+        # Build items rows
         items_html = ""
-        for item in order.ordered_items:
+        for item in items:
             items_html += f"""
             <tr>
                 <td style="padding:10px 8px;border-bottom:1px solid #f0f0f0;">
-                    <span style="font-size:14px;color:#000;font-weight:500;">{item.product_name}</span><br>
-                    <span style="font-size:12px;color:#999;">SKU: {item.product_sku or "N/A"}</span>
+                    <span style="font-size:14px;color:#000;font-weight:500;">
+                        {item['product_name']}
+                    </span><br>
+                    <span style="font-size:12px;color:#999;">
+                        SKU: {item.get('product_sku') or 'N/A'}
+                    </span>
                 </td>
-                <td style="padding:10px 8px;border-bottom:1px solid #f0f0f0;text-align:center;
-                            font-size:14px;color:#555;">x{item.quantity}</td>
-                <td style="padding:10px 8px;border-bottom:1px solid #f0f0f0;text-align:right;
-                            font-size:14px;color:#000;font-weight:500;">
-                    ₹{item.total_price:,.2f}
+                <td style="padding:10px 8px;border-bottom:1px solid #f0f0f0;
+                            text-align:center;font-size:14px;color:#555;">
+                    x{item['quantity']}
+                </td>
+                <td style="padding:10px 8px;border-bottom:1px solid #f0f0f0;
+                            text-align:right;font-size:14px;color:#000;font-weight:500;">
+                    &#8377;{float(item['total_price']):,.2f}
                 </td>
             </tr>
             """
 
-        # Payment method label
-        print("Payment started")
         payment_label = (
             "Cash on Delivery"
-            if order.payment_method == "cod"
+            if payment_method == "cod"
             else "Online Payment (Razorpay)"
         )
 
-        # Shipping address
-        print("Shipping ---|-|")
-        addr = order.shipping_address or {}
-        address_line = ", ".join(
-            filter(
-                None,
-                [
-                    addr.get("street"),
-                    addr.get("city"),
-                    addr.get("state"),
-                    addr.get("postal_code"),
-                    addr.get("country"),
-                ],
-            )
-        )
-        
-        print("mail is sending")
+        discount_row = ""
+        if discount and discount > 0:
+            discount_row = f"""
+            <tr>
+                <td style="font-size:13px;color:#22c55e;padding:3px 0;">Discount</td>
+                <td style="font-size:13px;color:#22c55e;text-align:right;padding:3px 0;">
+                    -&#8377;{discount:,.2f}
+                </td>
+            </tr>
+            """
+
         resend.Emails.send(
             {
                 "from": os.getenv("EMAIL_FROM"),
                 "to": [email],
-                "subject": f"Order Confirmed – {order.order_id} | SaleMitra",
+                "subject": f"Order Confirmed \u2013 {order_id} | SaleMitra",
                 "html": f"""
             <div style="font-family:sans-serif;max-width:560px;margin:auto;padding:32px;
                         background:#fff;border-radius:16px;border:1px solid #eee;">
 
                 <!-- Header -->
                 <div style="text-align:center;margin-bottom:28px;">
-                    <div style="display:inline-block;background:#000;border-radius:50%;
-                                width:52px;height:52px;line-height:52px;text-align:center;
+                    <div style="display:inline-flex;align-items:center;justify-content:center;
+                                background:#000;border-radius:50%;width:52px;height:52px;
                                 margin-bottom:12px;">
-                        <span style="font-size:26px;">✓</span>
+                        <span style="font-size:26px;color:#fff;">&#10003;</span>
                     </div>
                     <h2 style="font-size:22px;font-weight:700;color:#000;margin:0;">
                         Order Confirmed!</h2>
@@ -246,22 +257,23 @@ def _send_order_confirmation(email: str, username: str, order):
                         <tr>
                             <td style="font-size:13px;color:#999;padding:4px 0;">Order ID</td>
                             <td style="font-size:13px;color:#000;font-weight:600;
-                                        text-align:right;padding:4px 0;">
-                                {order.order_id}
-                            </td>
+                                        text-align:right;padding:4px 0;">{order_id}</td>
+                        </tr>
+                        <tr>
+                            <td style="font-size:13px;color:#999;padding:4px 0;">Date</td>
+                            <td style="font-size:13px;color:#000;text-align:right;padding:4px 0;">
+                                {order_date}</td>
                         </tr>
                         <tr>
                             <td style="font-size:13px;color:#999;padding:4px 0;">Payment</td>
                             <td style="font-size:13px;color:#000;text-align:right;padding:4px 0;">
-                                {payment_label}
-                            </td>
+                                {payment_label}</td>
                         </tr>
                         <tr>
-                            <td style="font-size:13px;color:#999;padding:4px 0;">Delivering to</td>
-                            <td style="font-size:13px;color:#000;text-align:right;
-                                        padding:4px 0;max-width:220px;">
-                                {address_line}
-                            </td>
+                            <td style="font-size:13px;color:#999;padding:4px 0;">
+                                Delivering to</td>
+                            <td style="font-size:13px;color:#000;text-align:right;padding:4px 0;">
+                                {address_line}</td>
                         </tr>
                     </table>
                 </div>
@@ -288,60 +300,94 @@ def _send_order_confirmation(email: str, username: str, order):
                 </table>
 
                 <!-- Price Breakdown -->
-                <div style="border-top:2px solid #f0f0f0;padding-top:16px;margin-bottom:24px;">
+                <div style="border-top:2px solid #f0f0f0;padding-top:16px;
+                            margin-bottom:24px;">
                     <table width="100%" cellpadding="0" cellspacing="0">
                         <tr>
                             <td style="font-size:13px;color:#999;padding:3px 0;">Subtotal</td>
                             <td style="font-size:13px;color:#555;text-align:right;padding:3px 0;">
-                                ₹{order.subtotal:,.2f}</td>
+                                &#8377;{subtotal:,.2f}</td>
                         </tr>
                         <tr>
                             <td style="font-size:13px;color:#999;padding:3px 0;">Tax</td>
                             <td style="font-size:13px;color:#555;text-align:right;padding:3px 0;">
-                                ₹{order.tax_amount:,.2f}</td>
+                                &#8377;{tax_amount:,.2f}</td>
                         </tr>
                         <tr>
                             <td style="font-size:13px;color:#999;padding:3px 0;">Shipping</td>
                             <td style="font-size:13px;color:#555;text-align:right;padding:3px 0;">
-                                ₹{order.shipping_charges:,.2f}</td>
+                                &#8377;{shipping_charges:,.2f}</td>
                         </tr>
-                        {"" if order.discount == 0 else f'''
+                        {discount_row}
                         <tr>
-                            <td style="font-size:13px;color:#22c55e;padding:3px 0;">Discount</td>
-                            <td style="font-size:13px;color:#22c55e;text-align:right;padding:3px 0;">
-                                -₹{order.discount:,.2f}</td>
-                        </tr>
-                        '''}
-                        <tr>
-                            <td style="font-size:15px;color:#000;font-weight:700;padding:10px 0 0;">
-                                Total</td>
+                            <td style="font-size:15px;color:#000;font-weight:700;
+                                        padding:10px 0 0;">Total</td>
                             <td style="font-size:15px;color:#000;font-weight:700;
                                         text-align:right;padding:10px 0 0;">
-                                ₹{order.total_price:,.2f}</td>
+                                &#8377;{total_price:,.2f}</td>
                         </tr>
                     </table>
                 </div>
 
-                <!-- Footer note -->
+                <!-- Footer -->
                 <p style="color:#999;font-size:12px;text-align:center;margin:0;">
                     You will receive a shipping update once your order is dispatched.<br>
-                    For support, reply to this email or contact us at SaleMitra.
+                    For support, contact us at SaleMitra.
                 </p>
                 <hr style="border:none;border-top:1px solid #eee;margin:24px 0;">
-                <p style="color:#ccc;font-size:11px;text-align:center;margin:0;">SaleMitra</p>
+                <p style="color:#ccc;font-size:11px;text-align:center;margin:0;">
+                    SaleMitra
+                </p>
             </div>
             """,
             }
         )
+        print(f"[mailer] Order confirmation sent to {email}")
+
     except Exception as exc:
-        print(f"[mailer] Order confirmation email failed for {email}: {exc}")
+        print(f"[mailer] Order confirmation failed for {email}: {exc}")
 
 
-def send_order_confirmation_email(email: str, username: str, order):
-    print("threading started")
+def send_order_confirmation_email(
+    email: str,
+    username: str,
+    order,  # ORM object — we extract all data HERE in the main thread
+    ordered_items_data: list,  # plain dicts from ordered_items_data list
+):
+    addr = order.shipping_address or {}
+    address_line = ", ".join(
+        filter(
+            None,
+            [
+                addr.get("street"),
+                addr.get("city"),
+                addr.get("state"),
+                addr.get("postal_code"),
+                addr.get("country"),
+            ],
+        )
+    )
+
+    kwargs = dict(
+        email=email,
+        username=username,
+        order_id=order.order_id,
+        order_date=(
+            order.created_at.strftime("%d %b %Y, %I:%M %p") if order.created_at else ""
+        ),
+        payment_method=order.payment_method,
+        address_line=address_line,
+        items=ordered_items_data,  # already plain dicts
+        subtotal=float(order.subtotal or 0),
+        tax_amount=float(order.tax_amount or 0),
+        shipping_charges=float(order.shipping_charges or 0),
+        discount=float(order.discount or 0),
+        total_price=float(order.total_price or 0),
+    )
+
     threading.Thread(
         target=_send_order_confirmation,
-        args=(email, username, order),
+        kwargs=kwargs,
         daemon=True,
     ).start()
 
@@ -505,7 +551,7 @@ def _create_shiprocket_shipment(order_id: str):
 
 
 def create_shipment_async(order_id: str):
-    """Fire-and-forget: push order to Shiprocket in a background thread."""
+    print("order started for shiprocket")
     threading.Thread(
         target=_create_shiprocket_shipment,
         args=(order_id,),

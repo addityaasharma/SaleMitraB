@@ -1887,11 +1887,16 @@ def create_order():
 
             new_order.status = "confirmed"
             new_order.payment_status = "paid"
-            
+
             db.session.commit()
-            create_shipment_async(new_order.order_id)
             print("Sending started")
-            send_order_confirmation_email(user.email, user.username, new_order)
+            create_shipment_async(new_order.order_id)
+            send_order_confirmation_email(
+                user.email,
+                user.username,
+                new_order,
+                ordered_items_data,
+            )
             return (
                 jsonify(
                     {
