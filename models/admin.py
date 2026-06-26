@@ -121,6 +121,7 @@ class Products(db.Model):
     country_of_origin = db.Column(db.String(255), nullable=True)
     weight = db.Column(db.Float, nullable=True)
     weight_unit = db.Column(db.String(20), nullable=True)
+    commission = db.Column(db.Integer, default=2)
     product_type = db.Column(db.String(255), nullable=True)
     sell_when_out_of_stock = db.Column(db.Boolean, default=False)
     quantity = db.Column(db.Integer, nullable=False)
@@ -141,6 +142,7 @@ class Products(db.Model):
         back_populates="product",
         cascade="all, delete-orphan",
     )
+    orderlist = db.relationship("OrderList", back_populates="products", uselist=True, cascade="all, delete-orphan")
 
 
 class ProductReview(db.Model):

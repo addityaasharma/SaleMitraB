@@ -1,4 +1,4 @@
-import os
+import os, string
 import jwt
 import uuid
 import hmac
@@ -424,6 +424,65 @@ def to_int(val, default=None):
         return int(val) if val not in (None, "") else default
     except (ValueError, TypeError):
         return default
+
+
+ALPHABET = string.ascii_uppercase + string.digits
+
+
+def _generate_candidate(length: int = 5) -> str:
+    return "".join(secrets.choice(ALPHABET) for _ in range(length))
+
+
+def generate_affiliate_id(length: int = 5, max_attempts: int = 10) -> str:
+    for _ in range(max_attempts):
+        candidate = _generate_candidate(length)
+        exists = User.query.filter_by(affiliate_id=candidate).first()
+        if not exists:
+            return candidate
+
+    raise RuntimeError(
+        f"Could not generate a unique {length}-character affiliate_id "
+        f"after {max_attempts} attempts. Consider increasing `length`."
+    )
+
+
+def handle_affiliate_commission(affiliate_ref, items, order_id, is_dict=False):
+    if not affiliate_ref:
+        return
+
+    aff_user = User.query.filter_by(affiliate_id=affiliate_ref).first()
+    if not aff_user:
+        return
+
+    dashboard = AffiliateDashboard.query.filter_by(user_id=aff_user.id).first()
+    if not dashboard:
+        return
+
+    total_commission = 0
+    for item in items:
+        product_id = item["product_id"] if is_dict else item.product_id
+        total_price = item["total_price"] if is_dict else item.total_price
+
+        product = db.session.get(Products, product_id)
+        if not product:
+            continue
+
+        commission_amount = round((total_price * product.commission) / 100, 2)
+        total_commission += commission_amount
+
+        db.session.add(
+            OrderList(
+                affiliate_id=dashboard.id,
+                product_id=product_id,
+                order_id=order_id,
+                commission=commission_amount,
+                revenue=total_price,
+                status="confirmed",
+            )
+        )
+
+    dashboard.total_orders += len(items)
+    dashboard.total_revenue += total_commission
 
 
 # ---------------------------------------------------------------------------

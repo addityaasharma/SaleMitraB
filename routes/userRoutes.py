@@ -11,6 +11,14 @@ from datetime import datetime, timedelta
 userBP = Blueprint("user", __name__, url_prefix="/user")
 
 
+def _delete_cart_items(user_id, cart_item_ids=None):
+    if cart_item_ids:
+        Cart.query.filter(Cart.user_id == user_id, Cart.id.in_(cart_item_ids)).delete(
+            synchronize_session=False
+        )
+    else:
+        Cart.query.filter_by(user_id=user_id).delete()
+        
 @userBP.route("/signup", methods=["POST"])
 def signup_otp():
     data = request.get_json()
@@ -1191,447 +1199,6 @@ def clear_wishlist():
         )
 
 
-# @userBP.route("/me/order/create", methods=["POST"])
-# @middleware
-# def create_order():
-#     try:
-#         user = g.user
-#         data = request.get_json(silent=True)
-#         if not data:
-#             return jsonify({"status": "error", "message": "No data provided"}), 400
-
-#         required_fields = ["address_id", "payment_method", "order_source"]
-#         missing = [f for f in required_fields if not data.get(f)]
-#         if missing:
-#             return (
-#                 jsonify(
-#                     {
-#                         "status": "error",
-#                         "message": f"Missing required fields: {', '.join(missing)}",
-#                     }
-#                 ),
-#                 400,
-#             )
-
-#         if data["payment_method"] not in ["cod", "razorpay"]:
-#             return (
-#                 jsonify(
-#                     {
-#                         "status": "error",
-#                         "message": "payment_method must be 'cod' or 'razorpay'",
-#                     }
-#                 ),
-#                 400,
-#             )
-
-#         if data["order_source"] not in ["cart", "buy_now"]:
-#             return (
-#                 jsonify(
-#                     {
-#                         "status": "error",
-#                         "message": "order_source must be 'cart' or 'buy_now'",
-#                     }
-#                 ),
-#                 400,
-#             )
-
-#         address = Address.query.filter_by(
-#             id=data["address_id"], user_id=user.id
-#         ).first()
-#         if not address:
-#             return jsonify({"status": "error", "message": "Address not found"}), 404
-
-#         shipping_address_snapshot = {
-#             "street": address.street,
-#             "city": address.city,
-#             "state": address.state,
-#             "postal_code": address.postal_code,
-#             "country": address.country,
-#         }
-
-#         order_items_raw = []
-
-#         if data["order_source"] == "buy_now":
-#             if not data.get("product_id") or not data.get("quantity"):
-#                 return (
-#                     jsonify(
-#                         {
-#                             "status": "error",
-#                             "message": "product_id and quantity are required for buy_now",
-#                         }
-#                     ),
-#                     400,
-#                 )
-#             if int(data["quantity"]) < 1:
-#                 return (
-#                     jsonify(
-#                         {"status": "error", "message": "Quantity must be at least 1"}
-#                     ),
-#                     400,
-#                 )
-#             order_items_raw.append(
-#                 {
-#                     "product_id": data["product_id"],
-#                     "quantity": int(data["quantity"]),
-#                 }
-#             )
-
-#         elif data["order_source"] == "cart":
-#             cart_item_ids = data.get("cart_item_ids")
-#             if cart_item_ids:
-#                 cart_items = Cart.query.filter(
-#                     Cart.user_id == user.id, Cart.id.in_(cart_item_ids)
-#                 ).all()
-#             else:
-#                 cart_items = Cart.query.filter_by(user_id=user.id).all()
-
-#             if not cart_items:
-#                 return jsonify({"status": "error", "message": "Cart is empty"}), 400
-
-#             for item in cart_items:
-#                 order_items_raw.append(
-#                     {
-#                         "product_id": item.product_id,
-#                         "quantity": item.quantity,
-#                         "cart_item_id": item.id,
-#                     }
-#                 )
-
-#         ordered_items_data = []
-#         subtotal = 0
-#         total_tax = 0
-#         total_discount = 0
-
-#         for item in order_items_raw:
-#             product = db.session.get(Products, item["product_id"])
-#             if not product:
-#                 return (
-#                     jsonify(
-#                         {
-#                             "status": "error",
-#                             "message": f"Product with id {item['product_id']} not found",
-#                         }
-#                     ),
-#                     404,
-#                 )
-
-#             if product.status != "active":
-#                 return (
-#                     jsonify(
-#                         {
-#                             "status": "error",
-#                             "message": f"Product '{product.name}' is not available",
-#                         }
-#                     ),
-#                     400,
-#                 )
-
-#             if not product.sell_when_out_of_stock and product.stock < item["quantity"]:
-#                 return (
-#                     jsonify(
-#                         {
-#                             "status": "error",
-#                             "message": f"Insufficient stock for '{product.name}'. Only {product.stock} available",
-#                         }
-#                     ),
-#                     400,
-#                 )
-
-#             unit_price = product.price
-#             item_discount = 0
-#             if product.compare_at_price and product.compare_at_price > product.price:
-#                 item_discount = round(
-#                     (product.compare_at_price - product.price) * item["quantity"], 2
-#                 )
-
-#             item_subtotal = round(unit_price * item["quantity"], 2)
-#             tax_rate = (
-#                 product.tax_rate if product.charge_tax and product.tax_rate else 0
-#             )
-#             tax_amount = round((item_subtotal * tax_rate) / 100, 2)
-#             item_total = round(item_subtotal + tax_amount, 2)
-
-#             subtotal += item_subtotal
-#             total_tax += tax_amount
-#             total_discount += item_discount
-
-#             ordered_items_data.append(
-#                 {
-#                     "product_id": product.id,
-#                     "product_name": product.name,
-#                     "product_sku": product.sku,
-#                     "product_image": product.product_image,
-#                     "quantity": item["quantity"],
-#                     "unit_price": unit_price,
-#                     "tax_rate": tax_rate,
-#                     "tax_amount": tax_amount,
-#                     "discount": item_discount,
-#                     "total_price": item_total,
-#                     "cart_item_id": item.get("cart_item_id"),
-#                 }
-#             )
-
-#         shipping_charges = data.get("shipping_charges", 0)
-#         coupon_discount = data.get("coupon_discount", 0)
-#         total_discount += coupon_discount
-#         grand_total = round(
-#             subtotal + total_tax + shipping_charges - coupon_discount, 2
-#         )
-
-#         new_order = Orders(
-#             user_id=user.id,
-#             order_id=generate_order_id(),
-#             address_id=address.id,
-#             shipping_address=shipping_address_snapshot,
-#             subtotal=round(subtotal, 2),
-#             tax_amount=round(total_tax, 2),
-#             discount=round(total_discount, 2),
-#             shipping_charges=shipping_charges,
-#             total_price=grand_total,
-#             order_source=data["order_source"],
-#             status="pending",
-#             payment_method=data["payment_method"],
-#             payment_status="unpaid",
-#         )
-#         db.session.add(new_order)
-#         db.session.flush()
-
-#         for item in ordered_items_data:
-#             db.session.add(
-#                 OrderedItems(
-#                     order_id=new_order.id,
-#                     product_id=item["product_id"],
-#                     product_name=item["product_name"],
-#                     product_sku=item["product_sku"],
-#                     product_image=item["product_image"],
-#                     quantity=item["quantity"],
-#                     unit_price=item["unit_price"],
-#                     tax_rate=item["tax_rate"],
-#                     tax_amount=item["tax_amount"],
-#                     discount=item["discount"],
-#                     total_price=item["total_price"],
-#                 )
-#             )
-
-#         if data["payment_method"] == "cod":
-#             db.session.add(
-#                 Payment(
-#                     order_id=new_order.id,
-#                     user_id=user.id,
-#                     payment_method="cod",
-#                     amount=grand_total,
-#                     currency="INR",
-#                     status="pending",
-#                 )
-#             )
-
-#             for item in ordered_items_data:
-#                 product = db.session.get(Products, item["product_id"])
-#                 if product:
-#                     product.stock -= item["quantity"]
-
-#             if data["order_source"] == "cart":
-#                 Cart.query.filter_by(user_id=user.id).delete()
-
-#             new_order.status = "confirmed"
-#             db.session.commit()
-#             create_shipment_async(new_order.order_id)
-
-#             return (
-#                 jsonify(
-#                     {
-#                         "status": "success",
-#                         "message": "Order placed successfully",
-#                         "data": {
-#                             "order_id": new_order.order_id,
-#                             "total_price": grand_total,
-#                             "payment_method": "cod",
-#                             "status": "confirmed",
-#                         },
-#                     }
-#                 ),
-#                 201,
-#             )
-
-#         elif data["payment_method"] == "razorpay":
-#             razorpay_order = razorpay_client.order.create(
-#                 {
-#                     "amount": int(grand_total * 100),
-#                     "currency": "INR",
-#                     "receipt": new_order.order_id,
-#                     "payment_capture": 1,
-#                 }
-#             )
-
-#             new_order.razorpay_order_id = razorpay_order["id"]
-
-#             db.session.add(
-#                 Payment(
-#                     order_id=new_order.id,
-#                     user_id=user.id,
-#                     payment_method="razorpay",
-#                     amount=grand_total,
-#                     currency="INR",
-#                     status="pending",
-#                     razorpay_order_id=razorpay_order["id"],
-#                 )
-#             )
-#             db.session.commit()
-
-#             return (
-#                 jsonify(
-#                     {
-#                         "status": "success",
-#                         "message": "Razorpay order created, proceed to payment",
-#                         "data": {
-#                             "order_id": new_order.order_id,
-#                             "razorpay_order_id": razorpay_order["id"],
-#                             "amount": int(grand_total * 100),
-#                             "currency": "INR",
-#                             "key": os.getenv("RAZORPAY_KEY_ID"),
-#                         },
-#                     }
-#                 ),
-#                 201,
-#             )
-
-#     except Exception as e:
-#         db.session.rollback()
-#         return (
-#             jsonify(
-#                 {"status": "error", "message": "Internal server error", "error": str(e)}
-#             ),
-#             500,
-#         )
-
-
-# @userBP.route("/me/order/razorpay/verify", methods=["POST"])
-# @middleware
-# def verify_razorpay_payment():
-#     try:
-#         user = g.user
-#         data = request.get_json(silent=True)
-#         if not data:
-#             return jsonify({"status": "error", "message": "No data provided"}), 400
-
-#         required_fields = [
-#             "razorpay_order_id",
-#             "razorpay_payment_id",
-#             "razorpay_signature",
-#         ]
-#         missing = [f for f in required_fields if not data.get(f)]
-#         if missing:
-#             return (
-#                 jsonify(
-#                     {
-#                         "status": "error",
-#                         "message": f"Missing fields: {', '.join(missing)}",
-#                     }
-#                 ),
-#                 400,
-#             )
-
-#         payment = Payment.query.filter_by(
-#             razorpay_order_id=data["razorpay_order_id"], user_id=user.id
-#         ).first()
-#         if not payment:
-#             return (
-#                 jsonify({"status": "error", "message": "Payment record not found"}),
-#                 404,
-#             )
-
-#         order = db.session.get(Orders, payment.order_id)
-#         if not order:
-#             return jsonify({"status": "error", "message": "Order not found"}), 404
-
-#         # idempotent — webhook may have already updated it
-#         if order.payment_status == "paid":
-#             return (
-#                 jsonify(
-#                     {
-#                         "status": "success",
-#                         "message": "Payment already verified",
-#                         "data": {
-#                             "order_id": order.order_id,
-#                             "total_price": order.total_price,
-#                             "status": order.status,
-#                             "payment_status": order.payment_status,
-#                         },
-#                     }
-#                 ),
-#                 200,
-#             )
-
-#         body = f"{data['razorpay_order_id']}|{data['razorpay_payment_id']}"
-#         expected_signature = hmac.new(
-#             os.getenv("RAZORPAY_KEY_SECRET").encode(), body.encode(), hashlib.sha256
-#         ).hexdigest()
-
-#         if expected_signature != data["razorpay_signature"]:
-#             payment.status = "failed"
-#             payment.failure_reason = "Signature verification failed"
-#             order.payment_status = "failed"
-#             db.session.commit()
-#             return (
-#                 jsonify({"status": "error", "message": "Payment verification failed"}),
-#                 400,
-#             )
-
-#         payment.status = "success"
-#         payment.razorpay_payment_id = data["razorpay_payment_id"]
-#         payment.razorpay_signature = data["razorpay_signature"]
-#         payment.paid_at = datetime.now(timezone.utc)
-
-#         order.status = "confirmed"
-#         order.payment_status = "paid"
-
-#         ordered_items = OrderedItems.query.filter_by(order_id=order.id).all()
-#         for item in ordered_items:
-#             product = db.session.get(Products, item.product_id)
-#             if product:
-#                 product.stock -= item.quantity
-
-#         if order.order_source == "cart":
-#             Cart.query.filter_by(user_id=user.id).delete()
-
-#         db.session.commit()
-#         create_shipment_async(order.order_id)
-
-#         return (
-#             jsonify(
-#                 {
-#                     "status": "success",
-#                     "message": "Payment verified, order confirmed",
-#                     "data": {
-#                         "order_id": order.order_id,
-#                         "payment_id": payment.razorpay_payment_id,
-#                         "total_price": order.total_price,
-#                         "status": order.status,
-#                         "payment_status": order.payment_status,
-#                     },
-#                 }
-#             ),
-#             200,
-#         )
-
-
-#     except Exception as e:
-#         db.session.rollback()
-#         return (
-#             jsonify(
-#                 {"status": "error", "message": "Internal server error", "error": str(e)}
-#             ),
-#             500,
-#         )
-def _delete_cart_items(user_id, cart_item_ids=None):
-    if cart_item_ids:
-        Cart.query.filter(Cart.user_id == user_id, Cart.id.in_(cart_item_ids)).delete(
-            synchronize_session=False
-        )
-    else:
-        Cart.query.filter_by(user_id=user_id).delete()
-
-
 @userBP.route("/me/order/create", methods=["POST"])
 @middleware
 def create_order():
@@ -1875,21 +1442,22 @@ def create_order():
                 )
             )
 
-            # deduct stock
             for item in ordered_items_data:
                 product = db.session.get(Products, item["product_id"])
                 if product:
                     product.stock -= item["quantity"]
 
-            # delete only the cart rows that were ordered
             if data["order_source"] == "cart":
                 _delete_cart_items(user.id, cart_item_ids_used)
 
             new_order.status = "confirmed"
             new_order.payment_status = "paid"
-
+            try:
+                handle_affiliate_commission(request.args.get("affiliate_id"), ordered_items_data, new_order.id, is_dict=True)
+            except Exception as e:
+                print(f"[AFFILIATE ERROR] order_id={new_order.id} error={str(e)}")
+                
             db.session.commit()
-            print("Sending started")
             create_shipment_async(new_order.order_id)
             send_order_confirmation_email(
                 user.email,
@@ -2068,16 +1636,18 @@ def verify_razorpay_payment():
                 product.stock -= item.quantity
 
         if order.order_source == "cart":
-            # Re-derive the cart_item_ids that belong to this order.
-            # OrderedItems doesn't store cart_item_id, so we match by product_id.
             ordered_product_ids = [i.product_id for i in ordered_items]
             Cart.query.filter(
                 Cart.user_id == user.id,
                 Cart.product_id.in_(ordered_product_ids),
             ).delete(synchronize_session=False)
+            
+        try:
+            handle_affiliate_commission(request.args.get("affiliate_id"), ordered_items, order.id, is_dict=False)
+        except Exception as e:
+            print(f"[AFFILIATE ERROR] order_id={order.id} error={str(e)}")
 
         db.session.commit()
-
         create_shipment_async(order.order_id)
 
         return (
@@ -2296,7 +1866,20 @@ def cancel_order(order_id):
             except Exception as refund_error:
                 payment.refund_status = "failed"
                 payment.failure_reason = str(refund_error)
-
+        
+        try:
+            order_list = OrderList.query.filter_by(order_id=order.id).all()
+            for ol in order_list:
+                ol.status = "cancelled"
+        
+            dashboard = AffiliateDashboard.query.get(order_list[0].affiliate_id) if order_list else None
+            if dashboard:
+                cancelled_commission = sum(ol.commission for ol in order_list)
+                dashboard.total_revenue -= cancelled_commission
+                dashboard.total_orders -= len(order_list)
+        except Exception as e:
+            print(f"[AFFILIATE ERROR] cancel order_id={order.id} error={str(e)}")
+            
         db.session.commit()
 
         return (

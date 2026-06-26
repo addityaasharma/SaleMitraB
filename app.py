@@ -33,11 +33,13 @@ init_oauth(app)
 from routes.adminRouter import *
 from routes.userRoutes import *
 from routes.supportRoutes import *
+from routes.affiliateRoutes import *
 from sockets.support_socket import *
 
 app.register_blueprint(userBP)
 app.register_blueprint(adminBP)
 app.register_blueprint(supportBP)
+app.register_blueprint(affiliateBP)
 
 with app.app_context():
     db.create_all()

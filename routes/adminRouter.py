@@ -214,9 +214,6 @@ def update_admin():
         )
 
 
-# ---------------------- product section ------------------------------------------
-
-
 @adminBP.route("/product", methods=["POST"])
 @admin_middleware
 def create_product():
@@ -1042,9 +1039,6 @@ def delete_products():
         )
 
 
-# ---------------------- category section ------------------------------------------
-
-
 @adminBP.route("/category", methods=["POST"])
 @admin_middleware
 def create_category():
@@ -1599,7 +1593,6 @@ def update_category(category_id):
             if "icon" in data:
                 category.icon = data["icon"]
 
-            # --- add products to category ---
             if "add_product_ids" in data:
                 add_ids = data["add_product_ids"]
                 if not isinstance(add_ids, list):
@@ -1630,7 +1623,6 @@ def update_category(category_id):
                 for product in products_to_add:
                     product.category_id = category_id
 
-            # --- remove products from category ---
             if "remove_product_ids" in data:
                 remove_ids = data["remove_product_ids"]
                 if not isinstance(remove_ids, list):
@@ -2360,17 +2352,30 @@ def update_order(order_id):
         allowed_payment_statuses = ["paid", "unpaid", "refunded", "failed"]
 
         if "status" in data:
-            if data["status"] not in allowed_statuses:
+            if data["status"] not in allowed_statuses:  # ← this check is missing!
                 return (
                     jsonify(
-                        {
-                            "status": "error",
-                            "message": f"Invalid status. Allowed: {', '.join(allowed_statuses)}",
-                        }
+                    {
+                        "status": "error",
+                        "message": f"Invalid status. Allowed: {', '.join(allowed_statuses)}",
+                    }
                     ),
-                    400,
+                400,
                 )
             order.status = data["status"]
+            try:
+                order_list = OrderList.query.filter_by(order_id=order.id).all()
+                for ol in order_list:
+                    ol.status = data["status"]
+
+                if data["status"] == "cancelled" and order_list:
+                    dashboard = AffiliateDashboard.query.get(order_list[0].affiliate_id)
+                    if dashboard:
+                        cancelled_commission = sum(ol.commission for ol in order_list)
+                        dashboard.total_revenue -= cancelled_commission
+                        dashboard.total_orders -= len(order_list)
+            except Exception as e:
+                print(f"[AFFILIATE ERROR] update order_id={order.id} error={str(e)}")
 
         if "payment_status" in data:
             if data["payment_status"] not in allowed_payment_statuses:
@@ -2522,9 +2527,6 @@ def bulk_update_orders():
             ),
             500,
         )
-
-
-# ----------------------- banner -----------------------------------
 
 
 @adminBP.route("/banner", methods=["POST"])
@@ -4525,6 +4527,306 @@ def delete_collection(collection_id):
                 {
                     "status": "error",
                     "message": "Failed to delete collection",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/affiliates", methods=["GET"])
+@admin_middleware
+def get_all_affiliates():
+    try:
+        page = request.args.get("page", 1, type=int)
+        per_page = request.args.get("per_page", 10, type=int)
+        per_page = min(per_page, 50)
+
+        date_from = request.args.get("date_from")
+        date_to = request.args.get("date_to")
+        sort_by = request.args.get(
+            "sort_by", "created_at"
+        )  # created_at | total_revenue | total_orders | total_withdrawal
+        order = request.args.get("order", "desc")
+
+        query = AffiliateDashboard.query
+
+        if date_from:
+            query = query.filter(AffiliateDashboard.created_at >= date_from)
+        if date_to:
+            query = query.filter(AffiliateDashboard.created_at <= date_to)
+
+        sort_column = getattr(
+            AffiliateDashboard, sort_by, AffiliateDashboard.created_at
+        )
+        query = query.order_by(
+            sort_column.desc() if order == "desc" else sort_column.asc()
+        )
+
+        paginated = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        affiliates = [
+            {
+                "id": a.id,
+                "user_id": a.user_id,
+                "username": a.user.username,
+                "email": a.user.email,
+                "affiliate_id": a.user.affiliate_id,
+                "total_orders": a.total_orders,
+                "total_revenue": a.total_revenue,
+                "total_withdrawal": a.total_withdrawal,
+                "upi_id": a.upi_id,
+                "created_at": a.created_at,
+            }
+            for a in paginated.items
+        ]
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "data": affiliates,
+                    "pagination": {
+                        "page": paginated.page,
+                        "per_page": paginated.per_page,
+                        "total_pages": paginated.pages,
+                        "total_items": paginated.total,
+                        "has_next": paginated.has_next,
+                        "has_prev": paginated.has_prev,
+                    },
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch affiliates",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/affiliates/<int:affiliate_id>", methods=["GET"])
+@admin_middleware
+def get_affiliate(affiliate_id):
+    try:
+        dashboard = AffiliateDashboard.query.get(affiliate_id)
+        if not dashboard:
+            return jsonify({"status": "error", "message": "Affiliate not found"}), 404
+
+        available_balance = dashboard.total_revenue - dashboard.total_withdrawal
+
+        recent_withdrawals = [
+            {
+                "id": w.id,
+                "amount": w.amount,
+                "status": w.status,
+                "payslip": w.payslip,
+                "created_at": w.created_at,
+            }
+            for w in dashboard.withdrawals[-5:]
+        ]
+
+        recent_orders = [
+            {
+                "id": o.id,
+                "order_id": o.order_id,
+                "product_id": o.product_id,
+                "commission": o.commission,
+                "revenue": o.revenue,
+                "status": o.status,
+                "created_at": o.created_at,
+            }
+            for o in dashboard.orderlist[-5:]
+        ]
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "data": {
+                        "id": affiliate_id,
+                        "user_id": dashboard.user_id,
+                        "username": dashboard.user.username,
+                        "email": dashboard.user.email,
+                        "phone": dashboard.user.phone_number,
+                        "affiliate_id": dashboard.user.affiliate_id,
+                        "upi_id": dashboard.upi_id,
+                        "total_orders": dashboard.total_orders,
+                        "total_revenue": dashboard.total_revenue,
+                        "total_withdrawal": dashboard.total_withdrawal,
+                        "available_balance": available_balance,
+                        "recent_orders": recent_orders,
+                        "recent_withdrawals": recent_withdrawals,
+                        "created_at": dashboard.created_at,
+                        "updated_at": dashboard.updated_at,
+                    },
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch affiliate",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/withdrawals", methods=["GET"])
+@admin_middleware
+def get_all_withdrawals():
+    try:
+        page = request.args.get("page", 1, type=int)
+        per_page = request.args.get("per_page", 10, type=int)
+        per_page = min(per_page, 50)
+
+        status = request.args.get("status")  # pending | approved
+        date_from = request.args.get("date_from")
+        date_to = request.args.get("date_to")
+        order = request.args.get("order", "desc")
+
+        query = Withdrawal.query
+
+        if status:
+            query = query.filter(Withdrawal.status == status)
+        if date_from:
+            query = query.filter(Withdrawal.created_at >= date_from)
+        if date_to:
+            query = query.filter(Withdrawal.created_at <= date_to)
+
+        query = query.order_by(
+            Withdrawal.created_at.desc()
+            if order == "desc"
+            else Withdrawal.created_at.asc()
+        )
+
+        paginated = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        withdrawals = [
+            {
+                "id": w.id,
+                "affiliate_id": w.affiliate_id,
+                "username": w.affiliate.user.username,
+                "email": w.affiliate.user.email,
+                "upi_id": w.affiliate.upi_id,
+                "amount": w.amount,
+                "payslip": w.payslip,
+                "status": w.status,
+                "created_at": w.created_at,
+                "updated_at": w.updated_at,
+            }
+            for w in paginated.items
+        ]
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "data": withdrawals,
+                    "pagination": {
+                        "page": paginated.page,
+                        "per_page": paginated.per_page,
+                        "total_pages": paginated.pages,
+                        "total_items": paginated.total,
+                        "has_next": paginated.has_next,
+                        "has_prev": paginated.has_prev,
+                    },
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch withdrawals",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+# 8. ADMIN — APPROVE WITHDRAWAL + UPLOAD PAYSLIP
+@adminBP.route("/withdrawal/<int:withdrawal_id>", methods=["PUT"])
+@admin_middleware
+def approve_withdrawal(withdrawal_id):
+    try:
+        status = request.form.get("status")
+        payslip_file = request.files.get("payslip")
+
+        if status not in ("approved", "pending"):
+            return jsonify({"status": "error", "message": "Invalid status"}), 400
+
+        withdrawal = Withdrawal.query.get(withdrawal_id)
+        if not withdrawal:
+            return jsonify({"status": "error", "message": "Withdrawal not found"}), 404
+
+        withdrawal.status = status
+
+        if status == "approved":
+            if not payslip_file:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "Payslip file is required for approval",
+                        }
+                    ),
+                    400,
+                )
+
+            payslip_url = upload_file(payslip_file, folder="payslips")
+            withdrawal.payslip = payslip_url
+
+            dashboard = AffiliateDashboard.query.get(withdrawal.affiliate_id)
+            dashboard.total_withdrawal += withdrawal.amount
+
+            notification = Notification(
+                affiliate_id=withdrawal.affiliate_id,
+                message=f"Your withdrawal of ₹{withdrawal.amount} has been approved.",
+            )
+            db.session.add(notification)
+
+        db.session.commit()
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": f"Withdrawal {status}",
+                    "data": {
+                        "withdrawal_id": withdrawal.id,
+                        "status": withdrawal.status,
+                        "payslip": withdrawal.payslip,
+                    },
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to update withdrawal",
                     "error": str(e),
                 }
             ),

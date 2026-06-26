@@ -12,6 +12,8 @@ class User(db.Model):
     phone_number = db.Column(db.String(20), nullable=True)
     bio = db.Column(db.Text, nullable=True)
     role = db.Column(db.String(50), nullable=False, default="customer")
+    is_affiliate = db.Column(db.Boolean, default=False)
+    affiliate_id = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
     updated_at = db.Column(
         db.DateTime,
@@ -36,6 +38,121 @@ class User(db.Model):
     refunds = db.relationship(
         "Refund", backref="user", lazy=True, cascade="all, delete-orphan"
     )
+    affiliate = db.relationship(
+        "AffiliateDashboard",
+        uselist=False,
+        cascade="all, delete-orphan",
+        back_populates="user",
+    )
+
+
+class AffiliateDashboard(db.Model):
+    __tablename__ = "affiliate_dashboard"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(
+        db.Integer, db.ForeignKey("user.id", ondelete="cascade"), nullable=False
+    )
+    total_orders = db.Column(db.Float(), nullable=True, default=0.0)
+    total_revenue = db.Column(db.Float(), nullable=False, default=0.0)
+    total_withdrawal = db.Column(db.Float(), nullable=False, default=0.0)
+    upi_id = db.Column(db.String(255), nullable=False, default="")
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+    updated_at = db.Column(
+        db.DateTime,
+        default=db.func.current_timestamp(),
+        onupdate=db.func.current_timestamp(),
+    )
+    orderlist = db.relationship(
+        "OrderList",
+        back_populates="affiliate",
+        uselist=True,
+        cascade="all, delete-orphan",
+    )
+    withdrawals = db.relationship(
+        "Withdrawal",
+        back_populates="affiliate",
+        uselist=True,
+        cascade="all, delete-orphan",
+    )
+    notifications = db.relationship(
+        "Notification",
+        back_populates="affiliate",
+        uselist=True,
+        cascade="all, delete-orphan",
+    )
+    user = db.relationship("User", back_populates="affiliate")
+    
+
+
+class OrderList(db.Model):
+    __tablename__ = "ordered_list"
+    id = db.Column(db.Integer, primary_key=True)
+    affiliate_id = db.Column(
+        db.Integer,
+        db.ForeignKey("affiliate_dashboard.id", ondelete="cascade"),
+        nullable=False,
+    )
+    product_id = db.Column(
+        db.Integer, db.ForeignKey("products.id", ondelete="CASCADE"), nullable=False
+    )
+    order_id = db.Column(db.Integer, db.ForeignKey("orders.id"), nullable=True)
+    commission = db.Column(db.Float(), nullable=False, default=0.0)
+    revenue = db.Column(db.Float(), nullable=False, default=0.0)
+    status = db.Column(
+        db.Enum("pending", "in-transit", "confirmed", "cancelled", name="order_status"),
+        nullable=False,
+        default="pending",
+    )
+    affiliate = db.relationship("AffiliateDashboard", back_populates="orderlist")
+    products = db.relationship("Products", back_populates="orderlist")
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+    updated_at = db.Column(
+        db.DateTime,
+        default=db.func.current_timestamp(),
+        onupdate=db.func.current_timestamp(),
+    )
+
+
+class Withdrawal(db.Model):
+    __tablename__ = "withdrawal"
+    id = db.Column(db.Integer, primary_key=True)
+    affiliate_id = db.Column(
+        db.Integer,
+        db.ForeignKey("affiliate_dashboard.id", ondelete="cascade"),
+        nullable=False,
+    )
+    amount = db.Column(db.Float(), nullable=False)
+    payslip = db.Column(db.String(255), nullable=True)
+    status = db.Column(
+        db.Enum("pending", "approved", name="affiliate_status"),
+        default="pending",
+        nullable=False,
+    )
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+    updated_at = db.Column(
+        db.DateTime,
+        default=db.func.current_timestamp(),
+        onupdate=db.func.current_timestamp(),
+    )
+    affiliate = db.relationship("AffiliateDashboard", back_populates="withdrawals")
+
+
+class Notification(db.Model):
+    __tablename__ = "notifications"
+    id = db.Column(db.Integer, primary_key=True)
+    affiliate_id = db.Column(
+        db.Integer,
+        db.ForeignKey("affiliate_dashboard.id", ondelete="cascade"),
+        nullable=False,
+    )
+    message = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+    updated_at = db.Column(
+        db.DateTime,
+        default=db.func.current_timestamp(),
+        onupdate=db.func.current_timestamp(),
+    )
+    affiliate = db.relationship("AffiliateDashboard", back_populates="notifications")
 
 
 class Address(db.Model):
