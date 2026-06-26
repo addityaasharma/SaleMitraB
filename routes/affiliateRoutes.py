@@ -1,5 +1,4 @@
 from models.user import *
-from models.admin import *
 from flask import request, jsonify, Blueprint, g, session, redirect, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
 from config.extension import *
@@ -447,17 +446,17 @@ def get_notifications():
         date_to = request.args.get("date_to")
         order = request.args.get("order", "desc")
 
-        query = Notification.query.filter_by(affiliate_id=dashboard.id)
+        query = Notifications.query.filter_by(affiliate_id=dashboard.id)
 
         if date_from:
-            query = query.filter(Notification.created_at >= date_from)
+            query = query.filter(Notifications.created_at >= date_from)
         if date_to:
-            query = query.filter(Notification.created_at <= date_to)
+            query = query.filter(Notifications.created_at <= date_to)
 
         query = query.order_by(
-            Notification.created_at.desc()
+            Notifications.created_at.desc()
             if order == "desc"
-            else Notification.created_at.asc()
+            else Notifications.created_at.asc()
         )
 
         paginated = query.paginate(page=page, per_page=per_page, error_out=False)
@@ -511,7 +510,7 @@ def delete_notification(notification_id):
         if not dashboard:
             return jsonify({"status": "error", "message": "Dashboard not found"}), 404
 
-        notification = Notification.query.filter_by(
+        notification = Notifications.query.filter_by(
             id=notification_id, affiliate_id=dashboard.id
         ).first()
         if not notification:

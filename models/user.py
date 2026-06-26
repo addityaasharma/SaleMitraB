@@ -75,7 +75,7 @@ class AffiliateDashboard(db.Model):
         cascade="all, delete-orphan",
     )
     notifications = db.relationship(
-        "Notification",
+        "Notifications",
         back_populates="affiliate",
         uselist=True,
         cascade="all, delete-orphan",
@@ -137,7 +137,7 @@ class Withdrawal(db.Model):
     affiliate = db.relationship("AffiliateDashboard", back_populates="withdrawals")
 
 
-class Notification(db.Model):
+class Notifications(db.Model):
     __tablename__ = "notifications"
     id = db.Column(db.Integer, primary_key=True)
     affiliate_id = db.Column(

@@ -4797,7 +4797,7 @@ def approve_withdrawal(withdrawal_id):
             dashboard = AffiliateDashboard.query.get(withdrawal.affiliate_id)
             dashboard.total_withdrawal += withdrawal.amount
 
-            notification = Notification(
+            notification = Notifications(
                 affiliate_id=withdrawal.affiliate_id,
                 message=f"Your withdrawal of ₹{withdrawal.amount} has been approved.",
             )
