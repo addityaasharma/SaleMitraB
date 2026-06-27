@@ -449,33 +449,28 @@ def generate_affiliate_id(length: int = 5, max_attempts: int = 10) -> str:
 def handle_affiliate_commission(affiliate_ref, items, order_id, is_dict=False):
     if not affiliate_ref:
         return
-    
-    print("check 1 pass")
+
     aff_user = User.query.filter_by(affiliate_id=affiliate_ref).first()
     if not aff_user:
         return
 
-    print("check 2 pass")
     dashboard = AffiliateDashboard.query.filter_by(user_id=aff_user.id).first()
     if not dashboard:
         return
 
-    print("check 3 pass")
     total_commission = 0
     for item in items:
         product_id = item["product_id"] if is_dict else item.product_id
         total_price = item["total_price"] if is_dict else item.total_price
-        
-        print("check 4 pass")
+
         product = db.session.get(Products, product_id)
         if not product:
             return
 
-        print("check 5 pass")
-        commission_amount = round((total_price * product.commission) / 100, 2)
+        commission_rate = product.commission or 1
+        commission_amount = round((total_price * commission_rate) / 100, 2)
         total_commission += commission_amount
-        
-        print("check 6 pass")
+
         db.session.add(
             OrderList(
                 affiliate_id=dashboard.id,
@@ -486,8 +481,7 @@ def handle_affiliate_commission(affiliate_ref, items, order_id, is_dict=False):
                 status="confirmed",
             )
         )
-        
-    print("check 7 pass")
+
     dashboard.total_orders += len(items)
     dashboard.total_revenue += total_commission
 
