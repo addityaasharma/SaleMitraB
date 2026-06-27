@@ -392,6 +392,8 @@ def profile():
                         "role": g.user.role,
                         "created_at": g.user.created_at,
                         "updated_at": g.user.updated_at,
+                        "partner" : g.user.is_affiliate,
+                        "aff_id" : g.user.affiliate_id,
                     },
                 }
             ),

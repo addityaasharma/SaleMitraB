@@ -428,7 +428,6 @@ def get_withdrawals():
         )
 
 
-
 # 9. GET ALL NOTIFICATIONS (with pagination)
 @affiliateBP.route("/notifications", methods=["GET"])
 @middleware
@@ -539,6 +538,338 @@ def delete_notification(notification_id):
                 {
                     "status": "error",
                     "message": "Failed to delete notification",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@affiliateBP.route("/<string:affiliate_id>/categories", methods=["GET"])
+@middleware
+def get_categories(affiliate_id):
+    try:
+        page = request.args.get("page", 1, type=int)
+        per_page = request.args.get("per_page", 10, type=int)
+        per_page = min(per_page, 50)
+
+        search = request.args.get("search", "").strip()
+        order = request.args.get("order", "asc")  # asc | desc
+
+        query = Category.query
+
+        if search:
+            query = query.filter(Category.name.ilike(f"%{search}%"))
+
+        query = query.order_by(
+            Category.name.asc() if order == "asc" else Category.name.desc()
+        )
+
+        paginated = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        categories = [
+            {
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "slug": c.slug,
+                "icon": c.icon,
+                "color": c.color,
+                "total_products": len(c.products),
+            }
+            for c in paginated.items
+        ]
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "data": categories,
+                    "pagination": {
+                        "page": paginated.page,
+                        "per_page": paginated.per_page,
+                        "total_pages": paginated.pages,
+                        "total_items": paginated.total,
+                        "has_next": paginated.has_next,
+                        "has_prev": paginated.has_prev,
+                    },
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch categories",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@affiliateBP.route(
+    "/<string:affiliate_id>/categories/<int:category_id>/products", methods=["GET"]
+)
+@middleware
+def get_category_products(affiliate_id, category_id):
+    try:
+        category = Category.query.get(category_id)
+        if not category:
+            return jsonify({"status": "error", "message": "Category not found"}), 404
+
+        page = request.args.get("page", 1, type=int)
+        per_page = request.args.get("per_page", 10, type=int)
+        per_page = min(per_page, 50)
+
+        search = request.args.get("search", "").strip()
+        min_price = request.args.get("min_price", type=float)
+        max_price = request.args.get("max_price", type=float)
+        in_stock = request.args.get("in_stock")
+        sort_by = request.args.get(
+            "sort_by", "created_at"
+        )  # created_at | price | name | stock
+        order = request.args.get("order", "desc")  # asc | desc
+
+        query = Products.query.filter_by(category_id=category_id, status="active")
+
+        if search:
+            query = query.filter(Products.name.ilike(f"%{search}%"))
+        if min_price is not None:
+            query = query.filter(Products.price >= min_price)
+        if max_price is not None:
+            query = query.filter(Products.price <= max_price)
+        if in_stock == "true":
+            query = query.filter(Products.stock > 0)
+        if in_stock == "false":
+            query = query.filter(Products.stock == 0)
+
+        sort_column = getattr(Products, sort_by, Products.created_at)
+        query = query.order_by(
+            sort_column.desc() if order == "desc" else sort_column.asc()
+        )
+
+        paginated = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        products = [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "product_image": p.product_image,
+                "price": p.price,
+                "compare_at_price": p.compare_at_price,
+                "stock": p.stock,
+                "sku": p.sku,
+                "commission": p.commission,
+                "sizes": p.sizes,
+                "colors": p.colors,
+                "status": p.status,
+                "created_at": p.created_at,
+            }
+            for p in paginated.items
+        ]
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "data": {
+                        "category": {
+                            "id": category.id,
+                            "name": category.name,
+                            "slug": category.slug,
+                            "icon": category.icon,
+                            "color": category.color,
+                        },
+                        "products": products,
+                    },
+                    "pagination": {
+                        "page": paginated.page,
+                        "per_page": paginated.per_page,
+                        "total_pages": paginated.pages,
+                        "total_items": paginated.total,
+                        "has_next": paginated.has_next,
+                        "has_prev": paginated.has_prev,
+                    },
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch products",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@affiliateBP.route("/<string:affiliate_id>/products", methods=["GET"])
+@middleware
+def get_products(affiliate_id):
+    try:
+        page = request.args.get("page", 1, type=int)
+        per_page = request.args.get("per_page", 10, type=int)
+        per_page = min(per_page, 50)
+
+        search = request.args.get("search", "").strip()
+        category_id = request.args.get("category_id", type=int)
+        min_price = request.args.get("min_price", type=float)
+        max_price = request.args.get("max_price", type=float)
+        in_stock = request.args.get("in_stock")  # true | false
+        has_discount = request.args.get("has_discount")  # true | false
+        sort_by = request.args.get("sort_by", "created_at")
+        order = request.args.get("order", "desc")
+
+        query = Products.query.filter_by(status="active")
+
+        if search:
+            query = query.filter(
+                Products.name.ilike(f"%{search}%")
+                | Products.description.ilike(f"%{search}%")
+                | Products.sku.ilike(f"%{search}%")
+            )
+        if category_id:
+            query = query.filter(Products.category_id == category_id)
+        if min_price is not None:
+            query = query.filter(Products.price >= min_price)
+        if max_price is not None:
+            query = query.filter(Products.price <= max_price)
+        if in_stock == "true":
+            query = query.filter(Products.stock > 0)
+        if in_stock == "false":
+            query = query.filter(Products.stock == 0)
+        if has_discount == "true":
+            query = query.filter(
+                Products.compare_at_price != None,
+                Products.compare_at_price > Products.price,
+            )
+
+        sort_column = getattr(Products, sort_by, Products.created_at)
+        query = query.order_by(
+            sort_column.desc() if order == "desc" else sort_column.asc()
+        )
+
+        paginated = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        products = [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "product_image": p.product_image,
+                "price": p.price,
+                "compare_at_price": p.compare_at_price,
+                "stock": p.stock,
+                "sku": p.sku,
+                "commission": p.commission,
+                "sizes": p.sizes,
+                "colors": p.colors,
+                "status": p.status,
+                "category": {
+                    "id": p.category.id if p.category else None,
+                    "name": p.category.name if p.category else None,
+                    "slug": p.category.slug if p.category else None,
+                },
+                "created_at": p.created_at,
+            }
+            for p in paginated.items
+        ]
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "data": products,
+                    "pagination": {
+                        "page": paginated.page,
+                        "per_page": paginated.per_page,
+                        "total_pages": paginated.pages,
+                        "total_items": paginated.total,
+                        "has_next": paginated.has_next,
+                        "has_prev": paginated.has_prev,
+                    },
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch products",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@affiliateBP.route("/<string:affiliate_id>/products/<int:product_id>", methods=["GET"])
+@middleware
+def get_product(affiliate_id, product_id):
+    try:
+        product = Products.query.filter_by(id=product_id, status="active").first()
+        if not product:
+            return jsonify({"status": "error", "message": "Product not found"}), 404
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "data": {
+                        "id": product.id,
+                        "name": product.name,
+                        "description": product.description,
+                        "product_image": product.product_image,
+                        "product_images": product.product_images,
+                        "price": product.price,
+                        "compare_at_price": product.compare_at_price,
+                        "stock": product.stock,
+                        "sku": product.sku,
+                        "commission": product.commission,
+                        "sizes": product.sizes,
+                        "colors": product.colors,
+                        "weight": product.weight,
+                        "weight_unit": product.weight_unit,
+                        "product_type": product.product_type,
+                        "country_of_origin": product.country_of_origin,
+                        "sell_when_out_of_stock": product.sell_when_out_of_stock,
+                        "category": {
+                            "id": product.category.id if product.category else None,
+                            "name": product.category.name if product.category else None,
+                            "slug": product.category.slug if product.category else None,
+                            "icon": product.category.icon if product.category else None,
+                            "color": (
+                                product.category.color if product.category else None
+                            ),
+                        },
+                        "affiliate_link": f"/order/create?affiliate_id={affiliate_id}",
+                        "created_at": product.created_at,
+                        "updated_at": product.updated_at,
+                    },
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch product",
                     "error": str(e),
                 }
             ),
