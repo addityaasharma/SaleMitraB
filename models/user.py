@@ -223,6 +223,7 @@ class Orders(db.Model):
     shipping_charges = db.Column(db.Float, nullable=False, default=0)
     total_price = db.Column(db.Float, nullable=False)
     order_source = db.Column(db.String(50), nullable=False, default="cart")
+    affiliate_id = db.Column(db.String(100), nullable=True, default=None)
     status = db.Column(db.String(50), nullable=False, default="pending")
     payment_method = db.Column(db.String(50), nullable=False)
     payment_status = db.Column(db.String(50), nullable=False, default="unpaid")

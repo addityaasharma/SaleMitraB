@@ -1411,6 +1411,7 @@ def create_order():
             status="pending",
             payment_method=data["payment_method"],
             payment_status="unpaid",
+            affiliate_id=data.get("affiliate_id")
         )
         db.session.add(new_order)
         db.session.flush()  # get new_order.id without committing
@@ -1455,8 +1456,8 @@ def create_order():
             new_order.status = "confirmed"
             new_order.payment_status = "unpaid"
             try:
-                print(f"Affiliate started for {request.args.get('affiliate_id')}")
-                handle_affiliate_commission(data.get("affiliate_id"), ordered_items_data, new_order.id, is_dict=True)
+                print(f"Affiliate started for {new_order.affiliate_id}")
+                handle_affiliate_commission(new_order.affiliate_id, ordered_items_data, new_order.id, is_dict=True)
             except Exception as e:
                 print(f"[AFFILIATE ERROR] order_id={new_order.id} error={str(e)}")
                 
@@ -1646,7 +1647,7 @@ def verify_razorpay_payment():
             ).delete(synchronize_session=False)
             
         try:
-            handle_affiliate_commission(data.get("affiliate_id"), ordered_items, order.id, is_dict=False)
+            handle_affiliate_commission(order.affiliate_id, ordered_items, order.id, is_dict=False)
         except Exception as e:
             print(f"[AFFILIATE ERROR] order_id={order.id} error={str(e)}")
 
