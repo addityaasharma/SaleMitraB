@@ -1453,8 +1453,9 @@ def create_order():
                 _delete_cart_items(user.id, cart_item_ids_used)
 
             new_order.status = "confirmed"
-            new_order.payment_status = "paid"
+            new_order.payment_status = "unpaid"
             try:
+                print(f"Affiliate started for {request.args.get("affiliate_id")}")
                 handle_affiliate_commission(request.args.get("affiliate_id"), ordered_items_data, new_order.id, is_dict=True)
             except Exception as e:
                 print(f"[AFFILIATE ERROR] order_id={new_order.id} error={str(e)}")
