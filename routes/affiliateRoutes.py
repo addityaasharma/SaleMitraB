@@ -391,6 +391,7 @@ def get_withdrawals():
                 "amount": w.amount,
                 "payslip": w.payslip,
                 "status": w.status,
+                "reason": w.note,
                 "created_at": w.created_at,
                 "updated_at": w.updated_at,
             }

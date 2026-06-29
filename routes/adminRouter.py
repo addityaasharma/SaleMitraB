@@ -4926,9 +4926,10 @@ def get_all_withdrawals():
 def approve_withdrawal(withdrawal_id):
     try:
         status = request.form.get("status")
+        note = request.form.get("note")
         payslip_file = request.files.get("payslip")
 
-        if status not in ("approved", "pending"):
+        if status not in ("approved", "pending", "rejected"):
             return jsonify({"status": "error", "message": "Invalid status"}), 400
 
         withdrawal = Withdrawal.query.get(withdrawal_id)
@@ -4938,7 +4939,7 @@ def approve_withdrawal(withdrawal_id):
         withdrawal.status = status
 
         if status == "approved":
-            if not payslip_file:
+            if not payslip_file or note:
                 return (
                     jsonify(
                         {
@@ -4958,6 +4959,30 @@ def approve_withdrawal(withdrawal_id):
             notification = Notifications(
                 affiliate_id=withdrawal.affiliate_id,
                 message=f"Your withdrawal of ₹{withdrawal.amount} has been approved.",
+            )
+            db.session.add(notification)
+        
+        if status == "rejected":
+            if not payslip_file:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "Payslip file and reason is required for rejected",
+                        }
+                    ),
+                    400,
+                )
+                
+            payslip_url = upload_file(payslip_file, folder="payslips")
+            withdrawal.payslip = payslip_url
+            withdrawal.note = note
+            
+            dashboard = AffiliateDashboard.query.get(withdrawal.affiliate_id)
+            dashboard.total_withdrawal -= withdrawal.amount
+            notification = Notifications(
+                affiliate_id=withdrawal.affiliate_id,
+                message=f"Your withdrawal of ₹{withdrawal.amount} has been rejected.",
             )
             db.session.add(notification)
 

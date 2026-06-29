@@ -123,10 +123,11 @@ class Withdrawal(db.Model):
     amount = db.Column(db.Float(), nullable=False)
     payslip = db.Column(db.String(255), nullable=True)
     status = db.Column(
-        db.Enum("pending", "approved", name="affiliate_status"),
+        db.Enum("pending", "approved", "rejected", name="affiliate_status"),
         default="pending",
         nullable=False,
     )
+    note = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
     updated_at = db.Column(
         db.DateTime,
