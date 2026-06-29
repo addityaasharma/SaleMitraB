@@ -2205,6 +2205,7 @@ def get_orders():
             "avg_order_value": (
                 round(total_revenue / len(all_orders), 2) if all_orders else 0
             ),
+            "refund_requested_orders": sum(1 for o in all_orders if o.status == "refund_requested"),
         }
 
         return (
