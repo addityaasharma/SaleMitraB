@@ -707,6 +707,27 @@ def bulk_update_products():
         )
 
 
+@adminBP.route("/product/stats", methods=["GET"])
+@admin_middleware
+def get_product_stats():
+    total = Products.query.count()
+    active = Products.query.filter(Products.status == "active").count()
+    out_of_stock = Products.query.filter(Products.stock <= 10).count()
+    draft = Products.query.filter(Products.status == "draft").count()
+    return (
+        jsonify(
+            {
+                "status": "success",
+                "total": total,
+                "active": active,
+                "out_of_stock": out_of_stock,
+                "draft": draft,
+            }
+        ),
+        200,
+    )
+
+
 @adminBP.route("/product/<int:product_id>", methods=["GET"])
 @admin_middleware
 def get_product(product_id):
