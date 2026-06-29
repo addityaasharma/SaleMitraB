@@ -2351,18 +2351,33 @@ def update_order(order_id):
         ]
         allowed_payment_statuses = ["paid", "unpaid", "refunded", "failed"]
 
+        old_status = order.status
+
         if "status" in data:
-            if data["status"] not in allowed_statuses:  # ← this check is missing!
+            if data["status"] not in allowed_statuses:
                 return (
                     jsonify(
-                    {
-                        "status": "error",
-                        "message": f"Invalid status. Allowed: {', '.join(allowed_statuses)}",
-                    }
+                        {
+                            "status": "error",
+                            "message": f"Invalid status. Allowed: {', '.join(allowed_statuses)}",
+                        }
                     ),
-                400,
+                    400,
                 )
+
             order.status = data["status"]
+
+            # Restore stock if cancelling a non-already-cancelled order
+            if data["status"] == "cancelled" and old_status not in (
+                "cancelled",
+                "returned",
+            ):
+                for item in order.ordered_items:
+                    product = db.session.get(Products, item.product_id)
+                    if product:
+                        product.stock += item.quantity
+
+            # Affiliate handling
             try:
                 order_list = OrderList.query.filter_by(order_id=order.id).all()
                 for ol in order_list:
@@ -2401,10 +2416,27 @@ def update_order(order_id):
 
         db.session.commit()
 
+        # Shiprocket: create shipment if newly confirmed
         if data.get("status") == "confirmed" and not order.shipment_id:
-            from functions.helper_function import create_shipment_async
+            try:
+                from functions.helper_function import create_shipment_async
 
-            create_shipment_async(order.order_id)
+                create_shipment_async(order.order_id)
+            except Exception as e:
+                print(f"[SHIPROCKET] Create error for {order.order_id}: {e}")
+
+        # Shiprocket: cancel shipment if cancelled
+        if data.get("status") == "cancelled" and order.shiprocket_order_id:
+            try:
+                from functions.helper_function import cancel_shiprocket_order
+
+                cancelled = cancel_shiprocket_order(order.shiprocket_order_id)
+                if not cancelled:
+                    print(
+                        f"[SHIPROCKET] Failed to cancel order {order.shiprocket_order_id}"
+                    )
+            except Exception as e:
+                print(f"[SHIPROCKET] Cancel error for {order.shiprocket_order_id}: {e}")
 
         return (
             jsonify({"status": "success", "message": "Order updated successfully"}),
@@ -2481,6 +2513,7 @@ def bulk_update_orders():
                 ),
                 400,
             )
+
         if (
             "payment_status" in updates
             and updates["payment_status"] not in allowed_payment_statuses
@@ -2499,11 +2532,76 @@ def bulk_update_orders():
         if not orders:
             return jsonify({"status": "error", "message": "No orders found"}), 404
 
+        new_status = updates.get("status")
+
         for order in orders:
+            old_status = order.status
+
             for field, value in updates.items():
                 setattr(order, field, value)
 
+            # Restore stock if cancelling
+            if new_status == "cancelled" and old_status not in (
+                "cancelled",
+                "returned",
+            ):
+                for item in order.ordered_items:
+                    product = db.session.get(Products, item.product_id)
+                    if product:
+                        product.stock += item.quantity
+
+            # Affiliate handling
+            if new_status in ("cancelled",):
+                try:
+                    order_list = OrderList.query.filter_by(order_id=order.id).all()
+                    for ol in order_list:
+                        ol.status = new_status
+
+                    if order_list:
+                        dashboard = AffiliateDashboard.query.get(
+                            order_list[0].affiliate_id
+                        )
+                        if dashboard:
+                            cancelled_commission = sum(
+                                ol.commission for ol in order_list
+                            )
+                            dashboard.total_revenue -= cancelled_commission
+                            dashboard.total_orders -= len(order_list)
+                except Exception as e:
+                    print(
+                        f"[AFFILIATE ERROR] bulk update order_id={order.id} error={str(e)}"
+                    )
+
         db.session.commit()
+
+        # Shiprocket calls after commit
+        if new_status:
+            from functions.helper_function import (
+                create_shipment_async,
+                cancel_shiprocket_order,
+            )
+
+            for order in orders:
+                # Create shipment if confirmed and not already created
+                if new_status == "confirmed" and not order.shipment_id:
+                    try:
+                        create_shipment_async(order.order_id)
+                    except Exception as e:
+                        print(f"[SHIPROCKET] Create error for {order.order_id}: {e}")
+
+                # Cancel shipment if cancelled
+                if new_status == "cancelled" and order.shiprocket_order_id:
+                    try:
+                        cancelled = cancel_shiprocket_order(order.shiprocket_order_id)
+                        if not cancelled:
+                            print(
+                                f"[SHIPROCKET] Failed to cancel {order.shiprocket_order_id}"
+                            )
+                    except Exception as e:
+                        print(
+                            f"[SHIPROCKET] Cancel error for {order.shiprocket_order_id}: {e}"
+                        )
+
         return (
             jsonify(
                 {
