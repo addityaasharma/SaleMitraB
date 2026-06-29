@@ -1456,13 +1456,13 @@ def create_order():
             new_order.status = "confirmed"
             new_order.payment_status = "unpaid"
             try:
-                print(f"Affiliate started for {new_order.affiliate_id}")
                 handle_affiliate_commission(new_order.affiliate_id, ordered_items_data, new_order.id, is_dict=True)
             except Exception as e:
                 print(f"[AFFILIATE ERROR] order_id={new_order.id} error={str(e)}")
                 
             db.session.commit()
-            create_shipment_async(new_order.order_id)
+            sr_data, sr_error = create_shiprocket_order(new_order, user)
+            print("SR RESULT:", sr_data, sr_error)
             send_order_confirmation_email(
                 user.email,
                 user.username,

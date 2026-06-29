@@ -15,14 +15,17 @@ import resend
 from config.extension import s3, oauth
 from models.user import *
 from models.admin import *
+import logging
 
 load_dotenv()
 
 SHIPROCKET_BASE = "https://apiv2.shiprocket.in/v1/external"
+ALPHABET = string.ascii_uppercase + string.digits
+logger = logging.getLogger(__name__)
 
 _sr_token: str | None = None
 _sr_token_fetched_at: datetime | None = None
-_SR_TOKEN_TTL_SECONDS = 23 * 3600  # refresh 1 h before the 24-h expiry
+_SR_TOKEN_TTL_SECONDS = 23 * 3600
 _sr_token_lock = threading.Lock()
 
 
@@ -53,7 +56,6 @@ def get_shiprocket_token() -> str | None:
             except Exception as exc:
                 print(f"[shiprocket] Login exception: {exc}")
                 _sr_token = None
-
         return _sr_token
 
 
@@ -426,9 +428,6 @@ def to_int(val, default=None):
         return default
 
 
-ALPHABET = string.ascii_uppercase + string.digits
-
-
 def _generate_candidate(length: int = 5) -> str:
     return "".join(secrets.choice(ALPHABET) for _ in range(length))
 
@@ -492,11 +491,6 @@ def handle_affiliate_commission(affiliate_ref, items, order_id, is_dict=False):
 
 
 def create_shiprocket_order(order, user):
-    """
-    Create an order on Shiprocket and return
-        ({ shiprocket_order_id, shipment_id }, None)   on success
-        (None, error_message)                          on failure
-    """
     token = get_shiprocket_token()
     if not token:
         return None, "Failed to authenticate with Shiprocket"
@@ -506,7 +500,7 @@ def create_shiprocket_order(order, user):
         "Content-Type": "application/json",
     }
 
-    addr = order.shipping_address  # dict snapshot stored on the order
+    addr = order.shipping_address
 
     order_items = [
         {
@@ -537,14 +531,12 @@ def create_shiprocket_order(order, user):
         "order_items": order_items,
         "payment_method": "Prepaid" if order.payment_method == "razorpay" else "COD",
         "sub_total": str(order.subtotal),
-        # Physical dimensions — move to product model if you have per-product data
         "length": 10,
         "breadth": 10,
         "height": 10,
         "weight": 0.5,
     }
 
-    # Only include channel_id when it is actually set
     channel_id = os.getenv("SHIPROCKET_CHANNEL_ID", "").strip()
     if channel_id:
         payload["channel_id"] = channel_id
@@ -576,29 +568,24 @@ def create_shiprocket_order(order, user):
 
 
 def _create_shiprocket_shipment(order_id: str):
-    """Background worker — called from create_shipment_async."""
     try:
+        logger.info(f"[shiprocket] Starting shipment for {order_id}")
         order = Orders.query.filter_by(order_id=order_id).first()
         if not order:
+            logger.error(f"[shiprocket] Order not found: {order_id}")
             return
-
         user = db.session.get(User, order.user_id)
         if not user:
+            logger.error(f"[shiprocket] User not found for order: {order_id}")
             return
-
         sr_data, sr_error = create_shiprocket_order(order, user)
         if sr_data:
-            order.shiprocket_order_id = str(sr_data["shiprocket_order_id"])
-            order.shipment_id = str(sr_data["shipment_id"])
-            order.tracking_url = (
-                f"https://shiprocket.co/tracking/{sr_data['shipment_id']}"
-            )
-            db.session.commit()
+            logger.info(f"[shiprocket] Success: {sr_data}")
+            ...
         else:
-            print(f"[shiprocket] Error for {order_id}: {sr_error}")
-
+            logger.error(f"[shiprocket] Failed: {sr_error}")
     except Exception as exc:
-        print(f"[shiprocket] Exception for {order_id}: {exc}")
+        logger.exception(f"[shiprocket] Exception for {order_id}: {exc}")
 
 
 def create_shipment_async(order_id: str):
