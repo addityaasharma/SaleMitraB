@@ -9,6 +9,7 @@ import threading
 from functools import wraps
 from datetime import datetime, timezone
 from flask import request, jsonify, g
+from flask import current_app
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import resend
@@ -568,32 +569,39 @@ def create_shiprocket_order(order, user):
 
 
 def _create_shiprocket_shipment(order_id: str):
-    try:
-        logger.info(f"[shiprocket] Starting shipment for {order_id}")
-        order = Orders.query.filter_by(order_id=order_id).first()
-        if not order:
-            logger.error(f"[shiprocket] Order not found: {order_id}")
-            return
-        user = db.session.get(User, order.user_id)
-        if not user:
-            logger.error(f"[shiprocket] User not found for order: {order_id}")
-            return
-        sr_data, sr_error = create_shiprocket_order(order, user)
-        if sr_data:
-            logger.info(f"[shiprocket] Success: {sr_data}")
-            ...
-        else:
-            logger.error(f"[shiprocket] Failed: {sr_error}")
-    except Exception as exc:
-        logger.exception(f"[shiprocket] Exception for {order_id}: {exc}")
+    with current_app._get_current_object().app_context():
+        try:
+            order = Orders.query.filter_by(order_id=order_id).first()
+            if not order:
+                print(f"[shiprocket] Order not found: {order_id}")
+                return
+
+            user = db.session.get(User, order.user_id)
+            if not user:
+                print(f"[shiprocket] User not found for order: {order_id}")
+                return
+
+            sr_data, sr_error = create_shiprocket_order(order, user)
+            if sr_data:
+                order.shiprocket_order_id = str(sr_data["shiprocket_order_id"])
+                order.shipment_id = str(sr_data["shipment_id"])
+                order.tracking_url = (
+                    f"https://shiprocket.co/tracking/{sr_data['shipment_id']}"
+                )
+                db.session.commit()
+            else:
+                print(f"[shiprocket] Error for {order_id}: {sr_error}")
+
+        except Exception as exc:
+            print(f"[shiprocket] Exception for {order_id}: {exc}")
 
 
 def create_shipment_async(order_id: str):
-    threading.Thread(
-        target=_create_shiprocket_shipment,
-        args=(order_id,),
-        daemon=True,
-    ).start()
+    app = current_app._get_current_object()
+    def run():
+        with app.app_context():
+            _create_shiprocket_shipment(order_id)
+    threading.Thread(target=run, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
