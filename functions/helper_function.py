@@ -553,7 +553,6 @@ def create_shiprocket_order(order, user):
 
     if res.status_code in (200, 201):
         body = res.json()
-        print("SR FULL BODY:", body)
         return {
             "shiprocket_order_id": body.get("order_id"),
             "shipment_id": body.get("shipment_id"),

@@ -1461,8 +1461,7 @@ def create_order():
                 print(f"[AFFILIATE ERROR] order_id={new_order.id} error={str(e)}")
                 
             db.session.commit()
-            sr_data, sr_error = create_shiprocket_order(new_order, user)
-            print("SR RESULT:", sr_data, sr_error)
+            create_shipment_async(new_order.order_id)
             send_order_confirmation_email(
                 user.email,
                 user.username,
