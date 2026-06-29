@@ -1760,6 +1760,7 @@ def get_order(order_id):
             return jsonify({"status": "error", "message": "Order not found"}), 404
 
         payment = Payment.query.filter_by(order_id=order.id).first()
+        refund = Refund.query.filter_by(order_id=order.id).first()
 
         tracking_data = None
         if order.shipment_id:
@@ -1794,6 +1795,24 @@ def get_order(order_id):
                                 "refund_amount": payment.refund_amount,
                             }
                             if payment
+                            else None
+                        ),
+                        "refund": (
+                            {
+                                "id": refund.id,
+                                "status": refund.status,
+                                "reason": refund.reason,
+                                "description": refund.description,
+                                "refund_amount": refund.refund_amount,
+                                "refund_type": refund.refund_type,
+                                "item_ids": refund.item_ids,
+                                "rejection_reason": refund.rejection_reason,
+                                "picked_up_at": refund.picked_up_at,
+                                "processed_at": refund.processed_at,
+                                "created_at": refund.created_at,
+                                "updated_at": refund.updated_at,
+                            }
+                            if refund
                             else None
                         ),
                         "items": [

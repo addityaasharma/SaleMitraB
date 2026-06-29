@@ -2350,6 +2350,46 @@ def update_order(order_id):
             "returned",
         ]
         allowed_payment_statuses = ["paid", "unpaid", "refunded", "failed"]
+        allowed_refund_statuses = [
+            "pending",
+            "approved",
+            "rejected",
+            "picked_up",
+            "parcel_received",
+            "payment_initiated",
+            "refund_done",
+        ]
+
+        if "refund_status" in data:
+            if data["refund_status"] not in allowed_refund_statuses:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": f"Invalid refund_status. Allowed: {', '.join(allowed_refund_statuses)}",
+                        }
+                    ),
+                    400,
+                )
+
+            refund = Refund.query.filter_by(order_id=order.id).first()
+            if not refund:
+                return (
+                    jsonify(
+                        {"status": "error", "message": "No refund found for this order"}
+                    ),
+                    404,
+                )
+
+            refund.status = data["refund_status"]
+
+            if data["refund_status"] == "rejected":
+                refund.rejection_reason = data.get("rejection_reason")
+            if data["refund_status"] == "picked_up":
+                refund.picked_up_at = datetime.utcnow()
+            if data["refund_status"] == "refund_done":
+                refund.processed_at = datetime.utcnow()
+                order.payment_status = "refunded"
 
         old_status = order.status
 
@@ -2419,17 +2459,15 @@ def update_order(order_id):
         # Shiprocket: create shipment if newly confirmed
         if data.get("status") == "confirmed" and not order.shipment_id:
             try:
-                from functions.helper_function import create_shipment_async
-
                 create_shipment_async(order.order_id)
             except Exception as e:
                 print(f"[SHIPROCKET] Create error for {order.order_id}: {e}")
 
-        # Shiprocket: cancel shipment if cancelled
-        if data.get("status") == "cancelled" and order.shiprocket_order_id:
+        if (
+            data.get("status") in ("cancelled", "returned", "delivered")
+            and order.shiprocket_order_id
+        ):
             try:
-                from functions.helper_function import cancel_shiprocket_order
-
                 cancelled = cancel_shiprocket_order(order.shiprocket_order_id)
                 if not cancelled:
                     print(

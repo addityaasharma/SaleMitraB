@@ -214,5 +214,3 @@ class CollectionProducts(db.Model):
             "product_id", "collection_id", name="uq_product_collection"
         ),
     )
-
-

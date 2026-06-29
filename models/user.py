@@ -81,7 +81,6 @@ class AffiliateDashboard(db.Model):
         cascade="all, delete-orphan",
     )
     user = db.relationship("User", back_populates="affiliate")
-    
 
 
 class OrderList(db.Model):
@@ -328,8 +327,21 @@ class Refund(db.Model):
     rejection_reason = db.Column(db.Text, nullable=True)
     processed_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+    pickup_agent_id = db.Column(
+        db.Integer, db.ForeignKey("agent.id", ondelete="SET NULL"), nullable=True
+    )
+    picked_up_at = db.Column(db.DateTime, nullable=True)
     updated_at = db.Column(
         db.DateTime,
         default=db.func.current_timestamp(),
         onupdate=db.func.current_timestamp(),
     )
+
+
+class Agent(db.Model):
+    __tablename__ = "agent"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    phone_number = db.Column(db.String(255), nullable=False)
+    password = db.Column(db.String(255), nullable=False)
+    agent_id = db.Column(db.String(255), nullable=False)
