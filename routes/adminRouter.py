@@ -2205,7 +2205,9 @@ def get_orders():
             "avg_order_value": (
                 round(total_revenue / len(all_orders), 2) if all_orders else 0
             ),
-            "refund_requested_orders": sum(1 for o in all_orders if o.status == "refund_requested"),
+            "refund_requested_orders": sum(
+                1 for o in all_orders if o.status == "refund_requested"
+            ),
         }
 
         return (
@@ -4961,7 +4963,7 @@ def approve_withdrawal(withdrawal_id):
                 message=f"Your withdrawal of ₹{withdrawal.amount} has been approved.",
             )
             db.session.add(notification)
-        
+
         if status == "rejected":
             if not payslip_file:
                 return (
@@ -4973,11 +4975,11 @@ def approve_withdrawal(withdrawal_id):
                     ),
                     400,
                 )
-                
+
             payslip_url = upload_file(payslip_file, folder="payslips")
             withdrawal.payslip = payslip_url
             withdrawal.note = note
-            
+
             dashboard = AffiliateDashboard.query.get(withdrawal.affiliate_id)
             dashboard.total_withdrawal -= withdrawal.amount
             notification = Notifications(
@@ -5010,6 +5012,630 @@ def approve_withdrawal(withdrawal_id):
                 {
                     "status": "error",
                     "message": "Failed to update withdrawal",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor", methods=["GET"])
+@admin_middleware
+def list_vendors():
+    try:
+        page = request.args.get("page", 1, type=int)
+        limit = request.args.get("limit", 10, type=int)
+        approval_status = request.args.get("approval_status")
+        is_active = request.args.get("is_active")
+        search = request.args.get("search")
+
+        query = Vendor.query
+
+        if approval_status:
+            query = query.filter(Vendor.approval_status == approval_status)
+        if is_active is not None:
+            query = query.filter(Vendor.is_active == (is_active.lower() == "true"))
+        if search:
+            query = query.join(Admin).filter(
+                db.or_(
+                    Vendor.store_name.ilike(f"%{search}%"),
+                    Admin.username.ilike(f"%{search}%"),
+                )
+            )
+
+        query = query.order_by(Vendor.created_at.desc())
+        pagination = query.paginate(page=page, per_page=limit, error_out=False)
+
+        vendors = []
+        for v in pagination.items:
+            admin = Admin.query.get(v.admin_id)
+            total_products = Products.query.filter_by(vendor_id=v.id).count()
+            vendors.append(
+                {
+                    "id": v.id,
+                    "store_name": v.store_name,
+                    "gst_number": v.gst_number,
+                    "commission_rate": v.commission_rate,
+                    "approval_status": v.approval_status,
+                    "is_active": v.is_active,
+                    "total_products": total_products,
+                    "created_at": v.created_at,
+                    "admin": (
+                        {
+                            "id": admin.id,
+                            "username": admin.username,
+                            "phone_number": admin.phone_number,
+                        }
+                        if admin
+                        else None
+                    ),
+                }
+            )
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "vendors": vendors,
+                    "total": pagination.total,
+                    "pages": pagination.pages,
+                    "page": page,
+                    "limit": limit,
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch vendors",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor/<int:vendor_id>", methods=["GET"])
+@admin_middleware
+def get_vendor_detail(vendor_id):
+    try:
+        vendor = Vendor.query.get(vendor_id)
+        if not vendor:
+            return jsonify({"status": "error", "message": "Vendor not found"}), 404
+
+        admin = Admin.query.get(vendor.admin_id)
+
+        all_products = Products.query.filter_by(vendor_id=vendor.id).all()
+        product_stats = {
+            "total": len(all_products),
+            "active": sum(1 for p in all_products if p.status == "active"),
+            "pending_review": sum(
+                1 for p in all_products if p.status == "pending_review"
+            ),
+            "rejected": sum(1 for p in all_products if p.status == "rejected"),
+        }
+
+        order_ids_subq = (
+            db.session.query(OrderedItems.order_id)
+            .join(Products, Products.id == OrderedItems.product_id)
+            .filter(Products.vendor_id == vendor.id)
+            .distinct()
+            .subquery()
+        )
+        total_orders = Orders.query.filter(
+            Orders.id.in_(db.session.query(order_ids_subq.c.order_id))
+        ).count()
+
+        total_paid_out = (
+            db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
+            .filter(
+                VendorPayout.vendor_id == vendor.id, VendorPayout.status == "approved"
+            )
+            .scalar()
+        )
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "vendor": {
+                        "id": vendor.id,
+                        "store_name": vendor.store_name,
+                        "store_description": vendor.store_description,
+                        "gst_number": vendor.gst_number,
+                        "upi_id": vendor.upi_id,
+                        "bank_account_number": vendor.bank_account_number,
+                        "bank_ifsc": vendor.bank_ifsc,
+                        "bank_account_holder": vendor.bank_account_holder,
+                        "commission_rate": vendor.commission_rate,
+                        "approval_status": vendor.approval_status,
+                        "is_active": vendor.is_active,
+                        "created_at": vendor.created_at,
+                        "updated_at": vendor.updated_at,
+                        "admin": (
+                            {
+                                "id": admin.id,
+                                "username": admin.username,
+                                "phone_number": admin.phone_number,
+                                "bio": admin.bio,
+                            }
+                            if admin
+                            else None
+                        ),
+                        "product_stats": product_stats,
+                        "total_orders": total_orders,
+                        "total_paid_out": round(total_paid_out, 2),
+                    },
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch vendor",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor/<int:vendor_id>/approve", methods=["PUT"])
+@admin_middleware
+def approve_vendor(vendor_id):
+    try:
+        vendor = Vendor.query.get(vendor_id)
+        if not vendor:
+            return jsonify({"status": "error", "message": "Vendor not found"}), 404
+
+        vendor.approval_status = "approved"
+        vendor.is_active = True
+        db.session.commit()
+
+        return (
+            jsonify({"status": "success", "message": "Vendor approved successfully"}),
+            200,
+        )
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to approve vendor",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor/<int:vendor_id>/reject", methods=["PUT"])
+@admin_middleware
+def reject_vendor(vendor_id):
+    try:
+        vendor = Vendor.query.get(vendor_id)
+        if not vendor:
+            return jsonify({"status": "error", "message": "Vendor not found"}), 404
+
+        vendor.approval_status = "rejected"
+        db.session.commit()
+
+        return (
+            jsonify({"status": "success", "message": "Vendor application rejected"}),
+            200,
+        )
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to reject vendor",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor/<int:vendor_id>/toggle-active", methods=["PUT"])
+@admin_middleware
+def toggle_vendor_active(vendor_id):
+    try:
+        vendor = Vendor.query.get(vendor_id)
+        if not vendor:
+            return jsonify({"status": "error", "message": "Vendor not found"}), 404
+        if vendor.approval_status != "approved":
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "Only approved vendors can be activated/deactivated",
+                    }
+                ),
+                400,
+            )
+
+        vendor.is_active = not vendor.is_active
+        db.session.commit()
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": f"Vendor {'activated' if vendor.is_active else 'deactivated'} successfully",
+                    "is_active": vendor.is_active,
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to update vendor status",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor/<int:vendor_id>/commission", methods=["PUT"])
+@admin_middleware
+def update_vendor_commission(vendor_id):
+    try:
+        vendor = Vendor.query.get(vendor_id)
+        if not vendor:
+            return jsonify({"status": "error", "message": "Vendor not found"}), 404
+
+        data = request.get_json()
+        rate = data.get("commission_rate")
+
+        if rate is None:
+            return (
+                jsonify({"status": "error", "message": "commission_rate is required"}),
+                400,
+            )
+        try:
+            rate = float(rate)
+        except (ValueError, TypeError):
+            return (
+                jsonify(
+                    {"status": "error", "message": "commission_rate must be a number"}
+                ),
+                400,
+            )
+        if rate < 0 or rate > 100:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "commission_rate must be between 0 and 100",
+                    }
+                ),
+                400,
+            )
+
+        vendor.commission_rate = rate
+        db.session.commit()
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": "Commission rate updated successfully",
+                    "commission_rate": vendor.commission_rate,
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to update commission rate",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/product/<int:product_id>/approve", methods=["PUT"])
+@admin_middleware
+def approve_vendor_product(product_id):
+    try:
+        product = Products.query.get(product_id)
+        if not product:
+            return jsonify({"status": "error", "message": "Product not found"}), 404
+
+        product.status = "active"
+        db.session.commit()
+
+        return (
+            jsonify(
+                {"status": "success", "message": "Product approved and is now live"}
+            ),
+            200,
+        )
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to approve product",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/product/<int:product_id>/reject", methods=["PUT"])
+@admin_middleware
+def reject_vendor_product(product_id):
+    try:
+        product = Products.query.get(product_id)
+        if not product:
+            return jsonify({"status": "error", "message": "Product not found"}), 404
+
+        product.status = "rejected"
+        db.session.commit()
+
+        return (
+            jsonify({"status": "success", "message": "Product rejected"}),
+            200,
+        )
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to reject product",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+# Vendor payouts
+@adminBP.route("/vendor-payout", methods=["GET"])
+@admin_middleware
+def list_vendor_payouts():
+    try:
+        page = request.args.get("page", 1, type=int)
+        limit = request.args.get("limit", 10, type=int)
+        status = request.args.get("status")
+
+        query = VendorPayout.query
+        if status:
+            query = query.filter(VendorPayout.status == status)
+
+        query = query.order_by(VendorPayout.created_at.desc())
+        pagination = query.paginate(page=page, per_page=limit, error_out=False)
+
+        payouts = []
+        for p in pagination.items:
+            vendor = Vendor.query.get(p.vendor_id)
+            payouts.append(
+                {
+                    "id": p.id,
+                    "amount": p.amount,
+                    "status": p.status,
+                    "payment_screenshot": p.payment_screenshot,
+                    "note": p.note,
+                    "created_at": p.created_at,
+                    "updated_at": p.updated_at,
+                    "vendor": (
+                        {
+                            "id": vendor.id,
+                            "store_name": vendor.store_name,
+                            "upi_id": vendor.upi_id,
+                            "bank_account_number": vendor.bank_account_number,
+                            "bank_ifsc": vendor.bank_ifsc,
+                            "bank_account_holder": vendor.bank_account_holder,
+                        }
+                        if vendor
+                        else None
+                    ),
+                }
+            )
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "payouts": payouts,
+                    "total": pagination.total,
+                    "pages": pagination.pages,
+                    "page": page,
+                    "limit": limit,
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch payouts",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor-payout/<int:payout_id>", methods=["GET"])
+@admin_middleware
+def get_vendor_payout_detail(payout_id):
+    try:
+        payout = VendorPayout.query.get(payout_id)
+        if not payout:
+            return (
+                jsonify({"status": "error", "message": "Payout request not found"}),
+                404,
+            )
+
+        vendor = Vendor.query.get(payout.vendor_id)
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "payout": {
+                        "id": payout.id,
+                        "amount": payout.amount,
+                        "status": payout.status,
+                        "payment_screenshot": payout.payment_screenshot,
+                        "note": payout.note,
+                        "created_at": payout.created_at,
+                        "updated_at": payout.updated_at,
+                        "vendor": (
+                            {
+                                "id": vendor.id,
+                                "store_name": vendor.store_name,
+                                "upi_id": vendor.upi_id,
+                                "bank_account_number": vendor.bank_account_number,
+                                "bank_ifsc": vendor.bank_ifsc,
+                                "bank_account_holder": vendor.bank_account_holder,
+                            }
+                            if vendor
+                            else None
+                        ),
+                    },
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch payout",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor-payout/<int:payout_id>/approve", methods=["PUT"])
+@admin_middleware
+def approve_vendor_payout(payout_id):
+    try:
+        payout = VendorPayout.query.get(payout_id)
+        if not payout:
+            return (
+                jsonify({"status": "error", "message": "Payout request not found"}),
+                404,
+            )
+        if payout.status != "pending":
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": f"Payout already {payout.status}, cannot re-approve",
+                    }
+                ),
+                400,
+            )
+
+        # Multipart: admin uploads proof of payment, same as the rest of the app's
+        # file-upload convention via upload_file().
+        screenshot_file = request.files.get("payment_screenshot")
+        if not screenshot_file:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "payment_screenshot is required to approve a payout",
+                    }
+                ),
+                400,
+            )
+
+        payout.payment_screenshot = upload_file(
+            screenshot_file, folder="vendor_payouts"
+        )
+        payout.status = "approved"
+        payout.note = request.form.get("note", payout.note)
+        db.session.commit()
+
+        return (
+            jsonify(
+                {"status": "success", "message": "Payout approved and marked as paid"}
+            ),
+            200,
+        )
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to approve payout",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor-payout/<int:payout_id>/reject", methods=["PUT"])
+@admin_middleware
+def reject_vendor_payout(payout_id):
+    try:
+        payout = VendorPayout.query.get(payout_id)
+        if not payout:
+            return (
+                jsonify({"status": "error", "message": "Payout request not found"}),
+                404,
+            )
+        if payout.status != "pending":
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": f"Payout already {payout.status}, cannot re-reject",
+                    }
+                ),
+                400,
+            )
+
+        data = request.get_json(silent=True) or {}
+        payout.status = "rejected"
+        payout.note = data.get("note", payout.note)
+        db.session.commit()
+
+        return (
+            jsonify({"status": "success", "message": "Payout request rejected"}),
+            200,
+        )
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to reject payout",
                     "error": str(e),
                 }
             ),

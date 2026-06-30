@@ -19,6 +19,63 @@ class Admin(db.Model):
     )
 
 
+class Vendor(db.Model):
+    __tablename__ = "vendor"
+    id = db.Column(db.Integer, primary_key=True)
+    admin_id = db.Column(
+        db.Integer,
+        db.ForeignKey("admin.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    store_name = db.Column(db.String(255), nullable=False)
+    store_description = db.Column(db.Text, nullable=True)
+    gst_number = db.Column(db.String(255), nullable=True)
+    upi_id = db.Column(db.String(255), nullable=True)
+    bank_account_number = db.Column(db.String(255), nullable=True)
+    bank_ifsc = db.Column(db.String(20), nullable=True)
+    bank_account_holder = db.Column(db.String(255), nullable=True)
+    commission_rate = db.Column(db.Float, nullable=False, default=10.0)
+    approval_status = db.Column(db.String(20), nullable=False, default="pending")
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+    updated_at = db.Column(
+        db.DateTime,
+        default=db.func.current_timestamp(),
+        onupdate=db.func.current_timestamp(),
+    )
+    admin = db.relationship(
+        "Admin", backref=db.backref("vendor_profile", uselist=False)
+    )
+    products = db.relationship("Products", back_populates="vendor", lazy=True)
+    payout_requests = db.relationship(
+        "VendorPayout", back_populates="vendor", cascade="all, delete-orphan", lazy=True
+    )
+
+
+class VendorPayout(db.Model):
+    __tablename__ = "vendor_payout"
+    id = db.Column(db.Integer, primary_key=True)
+    vendor_id = db.Column(
+        db.Integer, db.ForeignKey("vendor.id", ondelete="CASCADE"), nullable=False
+    )
+    amount = db.Column(db.Float, nullable=False)
+    status = db.Column(
+        db.Enum("pending", "approved", "rejected", name="vendor_payout_status"),
+        default="pending",
+        nullable=False,
+    )
+    payment_screenshot = db.Column(db.String(255), nullable=True)
+    note = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+    updated_at = db.Column(
+        db.DateTime,
+        default=db.func.current_timestamp(),
+        onupdate=db.func.current_timestamp(),
+    )
+    vendor = db.relationship("Vendor", back_populates="payout_requests")
+
+
 class Store(db.Model):
     __tablename__ = "store"
     id = db.Column(db.Integer, primary_key=True)
@@ -101,6 +158,9 @@ class Products(db.Model):
     category_id = db.Column(
         db.Integer, db.ForeignKey("category.id", ondelete="SET NULL"), nullable=True
     )
+    vendor_id = db.Column(
+        db.Integer, db.ForeignKey("vendor.id", ondelete="SET NULL"), nullable=True
+    )
     name = db.Column(db.String(255), unique=True, nullable=False)
     description = db.Column(db.Text, nullable=True)
     product_image = db.Column(db.String(255), nullable=False)
@@ -142,7 +202,13 @@ class Products(db.Model):
         back_populates="product",
         cascade="all, delete-orphan",
     )
-    orderlist = db.relationship("OrderList", back_populates="products", uselist=True, cascade="all, delete-orphan")
+    orderlist = db.relationship(
+        "OrderList",
+        back_populates="products",
+        uselist=True,
+        cascade="all, delete-orphan",
+    )
+    vendor = db.relationship("Vendor", back_populates="products")
 
 
 class ProductReview(db.Model):
