@@ -2430,8 +2430,13 @@ def update_order(order_id):
                 )
 
             order.status = data["status"]
+            if (
+                data["status"] == "delivered"
+                and order.payment_method == "cod"
+                and order.payment_status == "unpaid"
+            ):
+                order.payment_status = "paid"
 
-            # Restore stock if cancelling a non-already-cancelled order
             if data["status"] == "cancelled" and old_status not in (
                 "cancelled",
                 "returned",
@@ -2441,7 +2446,6 @@ def update_order(order_id):
                     if product:
                         product.stock += item.quantity
 
-            # Affiliate handling
             try:
                 order_list = OrderList.query.filter_by(order_id=order.id).all()
                 for ol in order_list:
@@ -2480,7 +2484,6 @@ def update_order(order_id):
 
         db.session.commit()
 
-        # Shiprocket: create shipment if newly confirmed
         if data.get("status") == "confirmed" and not order.shipment_id:
             try:
                 create_shipment_async(order.order_id)
@@ -2601,6 +2604,13 @@ def bulk_update_orders():
 
             for field, value in updates.items():
                 setattr(order, field, value)
+
+            if (
+                new_status == "delivered"
+                and order.payment_method == "cod"
+                and order.payment_status == "unpaid"
+            ):
+                order.payment_status = "paid"
 
             # Restore stock if cancelling
             if new_status == "cancelled" and old_status not in (
@@ -5097,7 +5107,10 @@ def list_vendors():
             500,
         )
 
+
 import calendar
+
+
 @adminBP.route("/vendor/<int:vendor_id>", methods=["GET"])
 @admin_middleware
 def get_vendor_detail(vendor_id):
@@ -5107,6 +5120,7 @@ def get_vendor_detail(vendor_id):
             return jsonify({"status": "error", "message": "Vendor not found"}), 404
 
         admin = Admin.query.get(vendor.admin_id)
+
         all_products = Products.query.filter_by(vendor_id=vendor.id).all()
         product_stats = {
             "total": len(all_products),
@@ -5124,6 +5138,9 @@ def get_vendor_detail(vendor_id):
             .filter(Products.vendor_id == vendor.id)
         )
 
+        def is_revenue_eligible(order):
+            return order.status == "delivered" and order.payment_status == "paid"
+
         month_param = request.args.get("month")
         month_start = month_end = None
         if month_param:
@@ -5135,7 +5152,10 @@ def get_vendor_detail(vendor_id):
             except (ValueError, TypeError):
                 return (
                     jsonify(
-                        {"status": "error", "message": "month must be in YYYY-MM format"}
+                        {
+                            "status": "error",
+                            "message": "month must be in YYYY-MM format",
+                        }
                     ),
                     400,
                 )
@@ -5146,23 +5166,35 @@ def get_vendor_detail(vendor_id):
                 Orders.created_at >= month_start, Orders.created_at <= month_end
             )
 
+        # ---- Overall lifetime stats ----
+        # total_orders counts ALL orders touching this vendor (any status), but
+        # total_revenue only counts revenue-eligible (delivered + paid) items —
+        # these are intentionally different metrics.
         all_rows = base_items_query.all()
         total_orders = len({o.id for _, o in all_rows})
-        total_revenue = sum(item.total_price for item, _ in all_rows)
+        total_revenue = sum(
+            item.total_price for item, o in all_rows if is_revenue_eligible(o)
+        )
 
+        # ---- Current month stats ----
         now = datetime.utcnow()
         this_month_start = datetime(now.year, now.month, 1)
         this_month_rows = base_items_query.filter(
             Orders.created_at >= this_month_start
         ).all()
         this_month_orders = len({o.id for _, o in this_month_rows})
-        this_month_revenue = sum(item.total_price for item, _ in this_month_rows)
+        this_month_revenue = sum(
+            item.total_price for item, o in this_month_rows if is_revenue_eligible(o)
+        )
 
+        # ---- Filtered (month-param) order + revenue list, paginated ----
         order_page = request.args.get("order_page", 1, type=int)
         order_limit = request.args.get("order_limit", 10, type=int)
 
         filtered_rows = filtered_items_query.order_by(Orders.created_at.desc()).all()
-        filtered_revenue = sum(item.total_price for item, _ in filtered_rows)
+        filtered_revenue = sum(
+            item.total_price for item, o in filtered_rows if is_revenue_eligible(o)
+        )
 
         orders_map = {}
         for item, order in filtered_rows:
@@ -5175,6 +5207,7 @@ def get_vendor_detail(vendor_id):
                     "created_at": order.created_at,
                     "items": [],
                     "order_revenue": 0.0,
+                    "revenue_eligible": is_revenue_eligible(order),
                 }
             orders_map[order.id]["items"].append(
                 {
@@ -5194,6 +5227,7 @@ def get_vendor_detail(vendor_id):
         start = (order_page - 1) * order_limit
         order_list_page = order_list_all[start : start + order_limit]
 
+        # ---- Payout requests ----
         payout_status = request.args.get("payout_status")
         payout_page = request.args.get("payout_page", 1, type=int)
         payout_limit = request.args.get("payout_limit", 10, type=int)
@@ -5274,9 +5308,11 @@ def get_vendor_detail(vendor_id):
                             "total": orders_total,
                             "page": order_page,
                             "limit": order_limit,
-                            "pages": (orders_total + order_limit - 1) // order_limit
-                            if order_limit
-                            else 0,
+                            "pages": (
+                                (orders_total + order_limit - 1) // order_limit
+                                if order_limit
+                                else 0
+                            ),
                         },
                         "payouts": {
                             "items": payouts_list,
@@ -5801,21 +5837,28 @@ def vendor_overview():
             .scalar()
         )
 
+        # Revenue grouped per vendor, joined through to Orders so we can
+        # filter on status == "delivered" AND payment_status == "paid" —
+        # previously this query never joined Orders at all.
         revenue_by_vendor = (
             db.session.query(
                 Products.vendor_id,
                 db.func.coalesce(db.func.sum(OrderedItems.total_price), 0.0),
             )
             .join(OrderedItems, OrderedItems.product_id == Products.id)
-            .filter(Products.vendor_id.isnot(None))
+            .join(Orders, Orders.id == OrderedItems.order_id)
+            .filter(
+                Products.vendor_id.isnot(None),
+                Orders.status == "delivered",
+                Orders.payment_status == "paid",
+            )
             .group_by(Products.vendor_id)
             .all()
         )
 
         commission_rates = {
-            v.id: v.commission_rate for v in Vendor.query.with_entities(
-                Vendor.id, Vendor.commission_rate
-            ).all()
+            v.id: v.commission_rate
+            for v in Vendor.query.with_entities(Vendor.id, Vendor.commission_rate).all()
         }
 
         total_revenue = 0.0

@@ -1001,18 +1001,23 @@ def vendor_dashboard():
                 status_counts[o.status] += 1
 
         vendor_items_all = (
-            db.session.query(OrderedItems, Orders.status, Orders.created_at)
+            db.session.query(
+                OrderedItems, Orders.status, Orders.payment_status, Orders.created_at
+            )
             .join(Orders, Orders.id == OrderedItems.order_id)
             .join(Products, Products.id == OrderedItems.product_id)
             .filter(Products.vendor_id == vendor.id)
             .all()
         )
 
+        def is_revenue_eligible(status, payment_status):
+            return status == "delivered" and payment_status == "paid"
+
         gross_revenue = round(
             sum(
                 item.total_price
-                for item, status, created_at in vendor_items_all
-                if status in REVENUE_STATUSES
+                for item, status, payment_status, created_at in vendor_items_all
+                if is_revenue_eligible(status, payment_status)
             ),
             2,
         )
@@ -1024,8 +1029,9 @@ def vendor_dashboard():
         month_gross = round(
             sum(
                 item.total_price
-                for item, status, created_at in vendor_items_all
-                if status in REVENUE_STATUSES and created_at >= this_month_start
+                for item, status, payment_status, created_at in vendor_items_all
+                if is_revenue_eligible(status, payment_status)
+                and created_at >= this_month_start
             ),
             2,
         )
@@ -1057,8 +1063,9 @@ def vendor_dashboard():
             f_gross = round(
                 sum(
                     item.total_price
-                    for item, status, created_at in vendor_items_all
-                    if status in REVENUE_STATUSES and f_start <= created_at <= f_end
+                    for item, status, payment_status, created_at in vendor_items_all
+                    if is_revenue_eligible(status, payment_status)
+                    and f_start <= created_at <= f_end
                 ),
                 2,
             )
@@ -1088,7 +1095,6 @@ def vendor_dashboard():
             )
             .scalar()
         )
-    
         available_balance = round(
             net_payable - total_paid_out - total_pending_payout, 2
         )
@@ -1164,12 +1170,18 @@ def request_vendor_payout():
                 400,
             )
 
+        # Revenue eligibility: order must be delivered AND payment collected.
         total_revenue = (
             db.session.query(
                 db.func.coalesce(db.func.sum(OrderedItems.total_price), 0.0)
             )
+            .join(Orders, Orders.id == OrderedItems.order_id)
             .join(Products, Products.id == OrderedItems.product_id)
-            .filter(Products.vendor_id == vendor.id)
+            .filter(
+                Products.vendor_id == vendor.id,
+                Orders.status == "delivered",
+                Orders.payment_status == "paid",
+            )
             .scalar()
         )
 
