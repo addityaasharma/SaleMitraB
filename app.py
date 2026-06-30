@@ -36,7 +36,7 @@ from routes.supportRoutes import *
 from routes.affiliateRoutes import *
 from sockets.support_socket import *
 from routes.agentRouter import *
-from routes.vendorRouter import *
+from routes.vendorRoutes import *
 
 app.register_blueprint(userBP)
 app.register_blueprint(adminBP)
