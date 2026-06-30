@@ -36,12 +36,14 @@ from routes.supportRoutes import *
 from routes.affiliateRoutes import *
 from sockets.support_socket import *
 from routes.agentRouter import *
+from routes.vendorRouter import *
 
 app.register_blueprint(userBP)
 app.register_blueprint(adminBP)
 app.register_blueprint(supportBP)
 app.register_blueprint(affiliateBP)
 app.register_blueprint(agentBP)
+app.register_blueprint(vendorBP)
 
 with app.app_context():
     db.create_all()
