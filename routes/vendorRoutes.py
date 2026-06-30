@@ -8,7 +8,7 @@ from functions.background_functions import *
 import json, jwt
 from functools import wraps
 from datetime import datetime, timedelta, timezone
-import os
+import os, calendar
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -82,7 +82,6 @@ def vendor_middleware(f):
         return f(*args, **kwargs)
 
     return decorated
-
 
 
 @vendorBP.route("/signup", methods=["POST"])
@@ -791,7 +790,10 @@ def delete_vendor_products():
             500,
         )
 
+
 REVENUE_STATUSES = ["pending", "processing", "shipped", "delivered"]
+
+
 @vendorBP.route("/orders", methods=["GET"])
 @vendor_middleware
 def get_vendor_orders():
@@ -968,7 +970,6 @@ def get_vendor_order(order_id):
         )
 
 
-# Dashboard
 @vendorBP.route("/dashboard", methods=["GET"])
 @vendor_middleware
 def vendor_dashboard():
@@ -1000,7 +1001,7 @@ def vendor_dashboard():
                 status_counts[o.status] += 1
 
         vendor_items_all = (
-            db.session.query(OrderedItems, Orders.status)
+            db.session.query(OrderedItems, Orders.status, Orders.created_at)
             .join(Orders, Orders.id == OrderedItems.order_id)
             .join(Products, Products.id == OrderedItems.product_id)
             .filter(Products.vendor_id == vendor.id)
@@ -1010,13 +1011,68 @@ def vendor_dashboard():
         gross_revenue = round(
             sum(
                 item.total_price
-                for item, status in vendor_items_all
+                for item, status, created_at in vendor_items_all
                 if status in REVENUE_STATUSES
             ),
             2,
         )
         commission_amount = round(gross_revenue * (vendor.commission_rate / 100), 2)
         net_payable = round(gross_revenue - commission_amount, 2)
+
+        now = datetime.utcnow()
+        this_month_start = datetime(now.year, now.month, 1)
+        month_gross = round(
+            sum(
+                item.total_price
+                for item, status, created_at in vendor_items_all
+                if status in REVENUE_STATUSES and created_at >= this_month_start
+            ),
+            2,
+        )
+        month_commission = round(month_gross * (vendor.commission_rate / 100), 2)
+        month_net = round(month_gross - month_commission, 2)
+        month_orders_count = len(
+            {o.id for o in vendor_orders if o.created_at >= this_month_start}
+        )
+
+        month_param = request.args.get("month")
+        filtered = None
+        if month_param:
+            try:
+                year, month = map(int, month_param.split("-"))
+                f_start = datetime(year, month, 1)
+                last_day = calendar.monthrange(year, month)[1]
+                f_end = datetime(year, month, last_day, 23, 59, 59)
+            except (ValueError, TypeError):
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "month must be in YYYY-MM format",
+                        }
+                    ),
+                    400,
+                )
+
+            f_gross = round(
+                sum(
+                    item.total_price
+                    for item, status, created_at in vendor_items_all
+                    if status in REVENUE_STATUSES and f_start <= created_at <= f_end
+                ),
+                2,
+            )
+            f_commission = round(f_gross * (vendor.commission_rate / 100), 2)
+            f_orders_count = len(
+                {o.id for o in vendor_orders if f_start <= o.created_at <= f_end}
+            )
+            filtered = {
+                "month": month_param,
+                "orders": f_orders_count,
+                "gross_revenue": f_gross,
+                "platform_commission": f_commission,
+                "net_payable": round(f_gross - f_commission, 2),
+            }
 
         total_paid_out = (
             db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
@@ -1025,7 +1081,17 @@ def vendor_dashboard():
             )
             .scalar()
         )
-        available_balance = round(net_payable - total_paid_out, 2)
+        total_pending_payout = (
+            db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
+            .filter(
+                VendorPayout.vendor_id == vendor.id, VendorPayout.status == "pending"
+            )
+            .scalar()
+        )
+    
+        available_balance = round(
+            net_payable - total_paid_out - total_pending_payout, 2
+        )
 
         today = datetime.utcnow().date()
         today_orders = [o for o in vendor_orders if o.created_at.date() == today]
@@ -1051,11 +1117,19 @@ def vendor_dashboard():
                             "net_payable": net_payable,
                             "available_balance": available_balance,
                             "total_paid_out": round(total_paid_out, 2),
+                            "total_pending_payout": round(total_pending_payout, 2),
                             "total_products": total_products,
                             "active_products": active_products,
                             "pending_products": pending_products,
                             "low_stock_count": low_stock,
                         },
+                        "this_month": {
+                            "orders": month_orders_count,
+                            "gross_revenue": month_gross,
+                            "platform_commission": month_commission,
+                            "net_payable": month_net,
+                        },
+                        "filtered_month": filtered,
                         "order_status_breakdown": status_counts,
                     },
                 }
@@ -1090,6 +1164,50 @@ def request_vendor_payout():
                 400,
             )
 
+        total_revenue = (
+            db.session.query(
+                db.func.coalesce(db.func.sum(OrderedItems.total_price), 0.0)
+            )
+            .join(Products, Products.id == OrderedItems.product_id)
+            .filter(Products.vendor_id == vendor.id)
+            .scalar()
+        )
+
+        commission_owed = total_revenue * (vendor.commission_rate / 100.0)
+        net_earnings = total_revenue - commission_owed
+
+        already_paid_out = (
+            db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
+            .filter(
+                VendorPayout.vendor_id == vendor.id,
+                VendorPayout.status == "approved",
+            )
+            .scalar()
+        )
+
+        already_pending = (
+            db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
+            .filter(
+                VendorPayout.vendor_id == vendor.id,
+                VendorPayout.status == "pending",
+            )
+            .scalar()
+        )
+
+        available_balance = net_earnings - already_paid_out - already_pending
+
+        if amount > available_balance:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": f"Requested amount exceeds available balance of ₹{round(available_balance, 2)}",
+                        "available_balance": round(available_balance, 2),
+                    }
+                ),
+                400,
+            )
+
         payout = VendorPayout(
             vendor_id=vendor.id,
             amount=amount,
@@ -1104,6 +1222,7 @@ def request_vendor_payout():
                     "status": "success",
                     "message": "Payout request submitted",
                     "id": payout.id,
+                    "remaining_balance": round(available_balance - amount, 2),
                 }
             ),
             201,

@@ -5097,7 +5097,7 @@ def list_vendors():
             500,
         )
 
-
+import calendar
 @adminBP.route("/vendor/<int:vendor_id>", methods=["GET"])
 @admin_middleware
 def get_vendor_detail(vendor_id):
@@ -5107,7 +5107,6 @@ def get_vendor_detail(vendor_id):
             return jsonify({"status": "error", "message": "Vendor not found"}), 404
 
         admin = Admin.query.get(vendor.admin_id)
-
         all_products = Products.query.filter_by(vendor_id=vendor.id).all()
         product_stats = {
             "total": len(all_products),
@@ -5118,24 +5117,116 @@ def get_vendor_detail(vendor_id):
             "rejected": sum(1 for p in all_products if p.status == "rejected"),
         }
 
-        order_ids_subq = (
-            db.session.query(OrderedItems.order_id)
+        base_items_query = (
+            db.session.query(OrderedItems, Orders)
+            .join(Orders, Orders.id == OrderedItems.order_id)
             .join(Products, Products.id == OrderedItems.product_id)
             .filter(Products.vendor_id == vendor.id)
-            .distinct()
-            .subquery()
         )
-        total_orders = Orders.query.filter(
-            Orders.id.in_(db.session.query(order_ids_subq.c.order_id))
-        ).count()
 
-        total_paid_out = (
-            db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
-            .filter(
-                VendorPayout.vendor_id == vendor.id, VendorPayout.status == "approved"
+        month_param = request.args.get("month")
+        month_start = month_end = None
+        if month_param:
+            try:
+                year, month = map(int, month_param.split("-"))
+                month_start = datetime(year, month, 1)
+                last_day = calendar.monthrange(year, month)[1]
+                month_end = datetime(year, month, last_day, 23, 59, 59)
+            except (ValueError, TypeError):
+                return (
+                    jsonify(
+                        {"status": "error", "message": "month must be in YYYY-MM format"}
+                    ),
+                    400,
+                )
+
+        filtered_items_query = base_items_query
+        if month_start and month_end:
+            filtered_items_query = filtered_items_query.filter(
+                Orders.created_at >= month_start, Orders.created_at <= month_end
             )
-            .scalar()
+
+        all_rows = base_items_query.all()
+        total_orders = len({o.id for _, o in all_rows})
+        total_revenue = sum(item.total_price for item, _ in all_rows)
+
+        now = datetime.utcnow()
+        this_month_start = datetime(now.year, now.month, 1)
+        this_month_rows = base_items_query.filter(
+            Orders.created_at >= this_month_start
+        ).all()
+        this_month_orders = len({o.id for _, o in this_month_rows})
+        this_month_revenue = sum(item.total_price for item, _ in this_month_rows)
+
+        order_page = request.args.get("order_page", 1, type=int)
+        order_limit = request.args.get("order_limit", 10, type=int)
+
+        filtered_rows = filtered_items_query.order_by(Orders.created_at.desc()).all()
+        filtered_revenue = sum(item.total_price for item, _ in filtered_rows)
+
+        orders_map = {}
+        for item, order in filtered_rows:
+            if order.id not in orders_map:
+                orders_map[order.id] = {
+                    "order_id": order.id,
+                    "order_number": order.order_id,
+                    "status": order.status,
+                    "payment_status": order.payment_status,
+                    "created_at": order.created_at,
+                    "items": [],
+                    "order_revenue": 0.0,
+                }
+            orders_map[order.id]["items"].append(
+                {
+                    "product_id": item.product_id,
+                    "product_name": item.product_name,
+                    "quantity": item.quantity,
+                    "unit_price": item.unit_price,
+                    "total_price": item.total_price,
+                }
+            )
+            orders_map[order.id]["order_revenue"] += item.total_price
+
+        order_list_all = sorted(
+            orders_map.values(), key=lambda o: o["created_at"], reverse=True
         )
+        orders_total = len(order_list_all)
+        start = (order_page - 1) * order_limit
+        order_list_page = order_list_all[start : start + order_limit]
+
+        payout_status = request.args.get("payout_status")
+        payout_page = request.args.get("payout_page", 1, type=int)
+        payout_limit = request.args.get("payout_limit", 10, type=int)
+
+        payout_query = VendorPayout.query.filter_by(vendor_id=vendor.id)
+        if payout_status:
+            payout_query = payout_query.filter(VendorPayout.status == payout_status)
+        payout_query = payout_query.order_by(VendorPayout.created_at.desc())
+        payout_pagination = payout_query.paginate(
+            page=payout_page, per_page=payout_limit, error_out=False
+        )
+
+        payouts_list = [
+            {
+                "id": p.id,
+                "amount": p.amount,
+                "status": p.status,
+                "payment_screenshot": p.payment_screenshot,
+                "note": p.note,
+                "created_at": p.created_at,
+                "updated_at": p.updated_at,
+            }
+            for p in payout_pagination.items
+        ]
+
+        all_payouts = VendorPayout.query.filter_by(vendor_id=vendor.id).all()
+        payout_counts = {
+            "total": len(all_payouts),
+            "pending": sum(1 for p in all_payouts if p.status == "pending"),
+            "approved": sum(1 for p in all_payouts if p.status == "approved"),
+            "rejected": sum(1 for p in all_payouts if p.status == "rejected"),
+        }
+        total_paid_out = sum(p.amount for p in all_payouts if p.status == "approved")
 
         return (
             jsonify(
@@ -5166,8 +5257,35 @@ def get_vendor_detail(vendor_id):
                             else None
                         ),
                         "product_stats": product_stats,
-                        "total_orders": total_orders,
-                        "total_paid_out": round(total_paid_out, 2),
+                        "stats": {
+                            "total_orders": total_orders,
+                            "total_revenue": round(total_revenue, 2),
+                            "this_month_orders": this_month_orders,
+                            "this_month_revenue": round(this_month_revenue, 2),
+                            "total_paid_out": round(total_paid_out, 2),
+                        },
+                        "filter": {
+                            "month": month_param,
+                            "filtered_orders_total": orders_total,
+                            "filtered_revenue": round(filtered_revenue, 2),
+                        },
+                        "orders": {
+                            "items": order_list_page,
+                            "total": orders_total,
+                            "page": order_page,
+                            "limit": order_limit,
+                            "pages": (orders_total + order_limit - 1) // order_limit
+                            if order_limit
+                            else 0,
+                        },
+                        "payouts": {
+                            "items": payouts_list,
+                            "total": payout_pagination.total,
+                            "pages": payout_pagination.pages,
+                            "page": payout_page,
+                            "limit": payout_limit,
+                            "counts": payout_counts,
+                        },
                     },
                 }
             ),
@@ -5636,6 +5754,122 @@ def reject_vendor_payout(payout_id):
                 {
                     "status": "error",
                     "message": "Failed to reject payout",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor/overview", methods=["GET"])
+@admin_middleware
+def vendor_overview():
+    try:
+        total_vendors = Vendor.query.count()
+        pending_vendors = Vendor.query.filter_by(approval_status="pending").count()
+        approved_vendors = Vendor.query.filter_by(approval_status="approved").count()
+        rejected_vendors = Vendor.query.filter_by(approval_status="rejected").count()
+        active_vendors = Vendor.query.filter_by(is_active=True).count()
+        inactive_vendors = Vendor.query.filter_by(is_active=False).count()
+
+        total_vendor_products = Products.query.filter(
+            Products.vendor_id.isnot(None)
+        ).count()
+        products_awaiting = Products.query.filter(
+            Products.vendor_id.isnot(None), Products.status == "pending_review"
+        ).count()
+        products_active = Products.query.filter(
+            Products.vendor_id.isnot(None), Products.status == "active"
+        ).count()
+        products_rejected = Products.query.filter(
+            Products.vendor_id.isnot(None), Products.status == "rejected"
+        ).count()
+
+        pending_payouts = VendorPayout.query.filter_by(status="pending").count()
+        approved_payouts = VendorPayout.query.filter_by(status="approved").count()
+        rejected_payouts = VendorPayout.query.filter_by(status="rejected").count()
+        total_payout_requests = pending_payouts + approved_payouts + rejected_payouts
+
+        total_paid_out = (
+            db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
+            .filter(VendorPayout.status == "approved")
+            .scalar()
+        )
+        pending_payout_amount = (
+            db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
+            .filter(VendorPayout.status == "pending")
+            .scalar()
+        )
+
+        revenue_by_vendor = (
+            db.session.query(
+                Products.vendor_id,
+                db.func.coalesce(db.func.sum(OrderedItems.total_price), 0.0),
+            )
+            .join(OrderedItems, OrderedItems.product_id == Products.id)
+            .filter(Products.vendor_id.isnot(None))
+            .group_by(Products.vendor_id)
+            .all()
+        )
+
+        commission_rates = {
+            v.id: v.commission_rate for v in Vendor.query.with_entities(
+                Vendor.id, Vendor.commission_rate
+            ).all()
+        }
+
+        total_revenue = 0.0
+        total_commission = 0.0
+        for vendor_id, revenue in revenue_by_vendor:
+            total_revenue += revenue
+            rate = commission_rates.get(vendor_id, 0.0)
+            total_commission += revenue * (rate / 100.0)
+
+        vendor_payout_owed = total_revenue - total_commission - total_paid_out
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "overview": {
+                        "vendors": {
+                            "total": total_vendors,
+                            "pending": pending_vendors,
+                            "approved": approved_vendors,
+                            "rejected": rejected_vendors,
+                            "active": active_vendors,
+                            "inactive": inactive_vendors,
+                        },
+                        "products": {
+                            "total": total_vendor_products,
+                            "awaiting_review": products_awaiting,
+                            "active": products_active,
+                            "rejected": products_rejected,
+                        },
+                        "payouts": {
+                            "total_requests": total_payout_requests,
+                            "pending": pending_payouts,
+                            "approved": approved_payouts,
+                            "rejected": rejected_payouts,
+                            "total_paid_out": round(total_paid_out, 2),
+                            "pending_amount": round(pending_payout_amount, 2),
+                        },
+                        "revenue": {
+                            "total_revenue": round(total_revenue, 2),
+                            "total_commission_earned": round(total_commission, 2),
+                            "vendor_payout_owed": round(vendor_payout_owed, 2),
+                        },
+                    },
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch vendor overview",
                     "error": str(e),
                 }
             ),
