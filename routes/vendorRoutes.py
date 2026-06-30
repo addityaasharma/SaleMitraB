@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-vendorBP = Blueprint("vendorBP", __name__, url_prefix="/api/vendor")
+vendorBP = Blueprint("vendorBP", __name__, url_prefix="/vendor")
 
 
 def clean(val):
