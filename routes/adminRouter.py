@@ -2692,7 +2692,10 @@ def bulk_update_orders():
                 order.payment_status = "paid"
 
             # Restore stock if cancelling
-            if new_status == "cancelled" and old_status not in ("cancelled", "returned"):
+            if new_status == "cancelled" and old_status not in (
+                "cancelled",
+                "returned",
+            ):
                 for item in order.ordered_items:
                     product = db.session.get(Products, item.product_id)
                     if product:
@@ -2705,13 +2708,19 @@ def bulk_update_orders():
                         ol.status = new_status
 
                     if order_list:
-                        dashboard = AffiliateDashboard.query.get(order_list[0].affiliate_id)
+                        dashboard = AffiliateDashboard.query.get(
+                            order_list[0].affiliate_id
+                        )
                         if dashboard:
-                            cancelled_commission = sum(ol.commission for ol in order_list)
+                            cancelled_commission = sum(
+                                ol.commission for ol in order_list
+                            )
                             dashboard.total_revenue -= cancelled_commission
                             dashboard.total_orders -= len(order_list)
                 except Exception as e:
-                    print(f"[AFFILIATE ERROR] bulk update order_id={order.id} error={str(e)}")
+                    print(
+                        f"[AFFILIATE ERROR] bulk update order_id={order.id} error={str(e)}"
+                    )
 
             try:
                 if new_status == "delivered" and old_status != "delivered":
@@ -2737,7 +2746,9 @@ def bulk_update_orders():
                         vendor_totals = {}
                         for item, vendor_id, commission_rate in vendor_rows:
                             net = item.total_price * (1 - commission_rate / 100.0)
-                            vendor_totals[vendor_id] = vendor_totals.get(vendor_id, 0.0) + net
+                            vendor_totals[vendor_id] = (
+                                vendor_totals.get(vendor_id, 0.0) + net
+                            )
 
                         for vendor_id, net_amount in vendor_totals.items():
                             if net_amount > 0:
@@ -2763,7 +2774,9 @@ def bulk_update_orders():
                         vendor_credit_map = {}
                         for t in credit_txns:
                             v_id = t.wallet.vendor_id
-                            vendor_credit_map[v_id] = vendor_credit_map.get(v_id, 0.0) + t.amount
+                            vendor_credit_map[v_id] = (
+                                vendor_credit_map.get(v_id, 0.0) + t.amount
+                            )
 
                         for vendor_id, credited_amount in vendor_credit_map.items():
                             try:
@@ -2780,7 +2793,9 @@ def bulk_update_orders():
                                     f"vendor {vendor_id}: {balance_err}"
                                 )
             except Exception as wallet_err:
-                print(f"[WALLET ERROR] bulk update order_id={order.id} error={str(wallet_err)}")
+                print(
+                    f"[WALLET ERROR] bulk update order_id={order.id} error={str(wallet_err)}"
+                )
 
         db.session.commit()
 
@@ -2801,9 +2816,13 @@ def bulk_update_orders():
                     try:
                         cancelled = cancel_shiprocket_order(order.shiprocket_order_id)
                         if not cancelled:
-                            print(f"[SHIPROCKET] Failed to cancel {order.shiprocket_order_id}")
+                            print(
+                                f"[SHIPROCKET] Failed to cancel {order.shiprocket_order_id}"
+                            )
                     except Exception as e:
-                        print(f"[SHIPROCKET] Cancel error for {order.shiprocket_order_id}: {e}")
+                        print(
+                            f"[SHIPROCKET] Cancel error for {order.shiprocket_order_id}: {e}"
+                        )
 
         return (
             jsonify(
@@ -3777,7 +3796,10 @@ def update_refund(refund_id):
                                         vendor_credit_map.get(v_id, 0.0) + t.amount
                                     )
 
-                                for vendor_id, credited_amount in vendor_credit_map.items():
+                                for (
+                                    vendor_id,
+                                    credited_amount,
+                                ) in vendor_credit_map.items():
                                     try:
                                         debit_wallet(
                                             vendor_id=vendor_id,
@@ -3832,9 +3854,9 @@ def update_refund(refund_id):
             ),
             500,
         )
-        
-        
-#STORE SETTINGS 
+
+
+# STORE SETTINGS
 @adminBP.route("/store", methods=["POST"])
 @admin_middleware
 def create_store():
