@@ -3,6 +3,7 @@ from models.admin import *
 from flask import request, jsonify, Blueprint, g
 from werkzeug.security import generate_password_hash, check_password_hash
 from config.extension import *
+from functions.wallet_helper import *
 from functions.helper_function import *
 from functions.background_functions import *
 import json, jwt
@@ -138,6 +139,11 @@ def vendor_signup():
             approval_status="pending",
         )
         db.session.add(vendor)
+        db.session.flush()
+        wallet = VendorWallet(
+            vendor_id=vendor.id, balance=0.0, total_earned=0.0, total_withdrawn=0.0
+        )
+        db.session.add(wallet)
         db.session.commit()
 
         return (
@@ -1081,13 +1087,9 @@ def vendor_dashboard():
                 "net_payable": round(f_gross - f_commission, 2),
             }
 
-        total_paid_out = (
-            db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
-            .filter(
-                VendorPayout.vendor_id == vendor.id, VendorPayout.status == "approved"
-            )
-            .scalar()
-        )
+        wallet = get_or_create_wallet(vendor.id)
+        db.session.commit()
+
         total_pending_payout = (
             db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
             .filter(
@@ -1095,9 +1097,8 @@ def vendor_dashboard():
             )
             .scalar()
         )
-        available_balance = round(
-            net_payable - total_paid_out - total_pending_payout, 2
-        )
+        available_balance = round(wallet.balance - total_pending_payout, 2)
+        total_paid_out = wallet.total_withdrawn
 
         today = datetime.utcnow().date()
         today_orders = [o for o in vendor_orders if o.created_at.date() == today]
@@ -1155,7 +1156,6 @@ def vendor_dashboard():
         )
 
 
-# Payouts
 @vendorBP.route("/payout-request", methods=["POST"])
 @vendor_middleware
 def request_vendor_payout():
@@ -1165,56 +1165,26 @@ def request_vendor_payout():
         amount = to_float(data.get("amount"))
 
         if not amount or amount <= 0:
-            return (
-                jsonify({"status": "error", "message": "Valid amount required"}),
-                400,
-            )
+            return jsonify({"status": "error", "message": "Valid amount required"}), 400
 
-        # Revenue eligibility: order must be delivered AND payment collected.
-        total_revenue = (
-            db.session.query(
-                db.func.coalesce(db.func.sum(OrderedItems.total_price), 0.0)
-            )
-            .join(Orders, Orders.id == OrderedItems.order_id)
-            .join(Products, Products.id == OrderedItems.product_id)
-            .filter(
-                Products.vendor_id == vendor.id,
-                Orders.status == "delivered",
-                Orders.payment_status == "paid",
-            )
-            .scalar()
-        )
-
-        commission_owed = total_revenue * (vendor.commission_rate / 100.0)
-        net_earnings = total_revenue - commission_owed
-
-        already_paid_out = (
-            db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
-            .filter(
-                VendorPayout.vendor_id == vendor.id,
-                VendorPayout.status == "approved",
-            )
-            .scalar()
-        )
+        wallet = get_or_create_wallet(vendor.id)
 
         already_pending = (
             db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
             .filter(
-                VendorPayout.vendor_id == vendor.id,
-                VendorPayout.status == "pending",
+                VendorPayout.vendor_id == vendor.id, VendorPayout.status == "pending"
             )
             .scalar()
         )
+        requestable_balance = round(wallet.balance - already_pending, 2)
 
-        available_balance = net_earnings - already_paid_out - already_pending
-
-        if amount > available_balance:
+        if amount > requestable_balance:
             return (
                 jsonify(
                     {
                         "status": "error",
-                        "message": f"Requested amount exceeds available balance of ₹{round(available_balance, 2)}",
-                        "available_balance": round(available_balance, 2),
+                        "message": f"Requested amount exceeds available balance of ₹{requestable_balance}",
+                        "available_balance": requestable_balance,
                     }
                 ),
                 400,
@@ -1234,7 +1204,7 @@ def request_vendor_payout():
                     "status": "success",
                     "message": "Payout request submitted",
                     "id": payout.id,
-                    "remaining_balance": round(available_balance - amount, 2),
+                    "remaining_balance": round(requestable_balance - amount, 2),
                 }
             ),
             201,
@@ -1289,6 +1259,131 @@ def get_vendor_payouts():
                 {
                     "status": "error",
                     "message": "Failed to fetch payouts",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@vendorBP.route("/wallet", methods=["GET"])
+@vendor_middleware
+def get_vendor_wallet():
+    try:
+        vendor = g.vendor
+        wallet = get_or_create_wallet(vendor.id)
+        db.session.commit()
+
+        pending_payout = (
+            db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
+            .filter(
+                VendorPayout.vendor_id == vendor.id, VendorPayout.status == "pending"
+            )
+            .scalar()
+        )
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "wallet": {
+                        "balance": wallet.balance,
+                        "total_earned": wallet.total_earned,
+                        "total_withdrawn": wallet.total_withdrawn,
+                        "pending_payout_requests": round(pending_payout, 2),
+                        "requestable_balance": round(
+                            wallet.balance - pending_payout, 2
+                        ),
+                        "updated_at": wallet.updated_at,
+                    },
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch wallet",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@vendorBP.route("/wallet/transactions", methods=["GET"])
+@vendor_middleware
+def get_vendor_wallet_transactions():
+    try:
+        vendor = g.vendor
+        wallet = get_or_create_wallet(vendor.id)
+        db.session.commit()
+
+        page = request.args.get("page", 1, type=int)
+        limit = request.args.get("limit", 10, type=int)
+        txn_type = request.args.get("type")  # credit / debit
+        source = request.args.get(
+            "source"
+        )  # order_earning / payout_withdrawal / refund_reversal / adjustment
+        from_date = request.args.get("from_date")
+        to_date = request.args.get("to_date")
+
+        query = VendorWalletTransaction.query.filter_by(wallet_id=wallet.id)
+
+        if txn_type:
+            query = query.filter(VendorWalletTransaction.type == txn_type)
+        if source:
+            query = query.filter(VendorWalletTransaction.source == source)
+        if from_date:
+            query = query.filter(
+                VendorWalletTransaction.created_at
+                >= datetime.strptime(from_date, "%Y-%m-%d")
+            )
+        if to_date:
+            query = query.filter(
+                VendorWalletTransaction.created_at
+                <= datetime.strptime(to_date, "%Y-%m-%d")
+            )
+
+        query = query.order_by(VendorWalletTransaction.created_at.desc())
+        pagination = query.paginate(page=page, per_page=limit, error_out=False)
+
+        transactions = [
+            {
+                "id": t.id,
+                "type": t.type,
+                "source": t.source,
+                "amount": t.amount,
+                "balance_after": t.balance_after,
+                "reference_id": t.reference_id,
+                "note": t.note,
+                "created_at": t.created_at,
+            }
+            for t in pagination.items
+        ]
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "transactions": transactions,
+                    "total": pagination.total,
+                    "pages": pagination.pages,
+                    "page": page,
+                    "limit": limit,
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch transactions",
                     "error": str(e),
                 }
             ),

@@ -5,6 +5,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from config.extension import *
 from functions.helper_function import *
 from functions.background_functions import *
+from functions.wallet_helper import credit_wallet, debit_wallet, get_or_create_wallet
 import json, jwt
 from datetime import datetime, timedelta
 import os
@@ -1768,8 +1769,6 @@ def delete_categories():
 
 
 # ─── USERS ───────────────────────────────────────────────────────────────────
-
-
 @adminBP.route("/users", methods=["GET"])
 @admin_middleware
 def get_users():
@@ -2030,8 +2029,6 @@ def get_user(user_id):
 
 
 # ─── ORDERS ──────────────────────────────────────────────────────────────────
-
-
 @adminBP.route("/orders", methods=["GET"])
 @admin_middleware
 def get_orders():
@@ -2430,6 +2427,7 @@ def update_order(order_id):
                 )
 
             order.status = data["status"]
+
             if (
                 data["status"] == "delivered"
                 and order.payment_method == "cod"
@@ -2459,6 +2457,83 @@ def update_order(order_id):
                         dashboard.total_orders -= len(order_list)
             except Exception as e:
                 print(f"[AFFILIATE ERROR] update order_id={order.id} error={str(e)}")
+
+            # ---- Vendor wallet sync ----
+            try:
+                if data["status"] == "delivered" and old_status != "delivered":
+                    already_credited = (
+                        VendorWalletTransaction.query.filter_by(
+                            source="order_earning", reference_id=order.id
+                        ).first()
+                        is not None
+                    )
+                    if not already_credited:
+                        vendor_rows = (
+                            db.session.query(
+                                OrderedItems, Products.vendor_id, Vendor.commission_rate
+                            )
+                            .join(Products, Products.id == OrderedItems.product_id)
+                            .join(Vendor, Vendor.id == Products.vendor_id)
+                            .filter(
+                                OrderedItems.order_id == order.id,
+                                Products.vendor_id.isnot(None),
+                            )
+                            .all()
+                        )
+                        vendor_totals = {}
+                        for item, vendor_id, commission_rate in vendor_rows:
+                            net = item.total_price * (1 - commission_rate / 100.0)
+                            vendor_totals[vendor_id] = (
+                                vendor_totals.get(vendor_id, 0.0) + net
+                            )
+
+                        for vendor_id, net_amount in vendor_totals.items():
+                            if net_amount > 0:
+                                credit_wallet(
+                                    vendor_id=vendor_id,
+                                    amount=round(net_amount, 2),
+                                    source="order_earning",
+                                    reference_id=order.id,
+                                    note=f"Order #{order.order_id} delivered",
+                                )
+
+                elif data["status"] == "returned" and old_status != "returned":
+                    already_reversed = (
+                        VendorWalletTransaction.query.filter_by(
+                            source="refund_reversal", reference_id=order.id
+                        ).first()
+                        is not None
+                    )
+                    if not already_reversed:
+                        credit_txns = VendorWalletTransaction.query.filter_by(
+                            source="order_earning", reference_id=order.id
+                        ).all()
+                        vendor_credit_map = {}
+                        for t in credit_txns:
+                            v_id = t.wallet.vendor_id
+                            vendor_credit_map[v_id] = (
+                                vendor_credit_map.get(v_id, 0.0) + t.amount
+                            )
+
+                        for vendor_id, credited_amount in vendor_credit_map.items():
+                            try:
+                                debit_wallet(
+                                    vendor_id=vendor_id,
+                                    amount=round(credited_amount, 2),
+                                    source="refund_reversal",
+                                    reference_id=order.id,
+                                    note=f"Order #{order.order_id} returned",
+                                )
+                            except ValueError as balance_err:
+                                print(
+                                    f"[WALLET] Reversal shortfall on order {order.id}, "
+                                    f"vendor {vendor_id}: {balance_err}"
+                                )
+            except Exception as wallet_err:
+                print(
+                    f"[WALLET ERROR] update order_id={order.id} error={str(wallet_err)}"
+                )
+            # ---- end vendor wallet sync ----
 
         if "payment_status" in data:
             if data["payment_status"] not in allowed_payment_statuses:
@@ -2520,6 +2595,10 @@ def update_order(order_id):
             ),
             500,
         )
+
+
+from functions.wallet_helper import credit_wallet, debit_wallet
+from models.admin import Vendor, VendorWalletTransaction
 
 
 @adminBP.route("/orders/bulk-update", methods=["PUT"])
@@ -2613,16 +2692,12 @@ def bulk_update_orders():
                 order.payment_status = "paid"
 
             # Restore stock if cancelling
-            if new_status == "cancelled" and old_status not in (
-                "cancelled",
-                "returned",
-            ):
+            if new_status == "cancelled" and old_status not in ("cancelled", "returned"):
                 for item in order.ordered_items:
                     product = db.session.get(Products, item.product_id)
                     if product:
                         product.stock += item.quantity
 
-            # Affiliate handling
             if new_status in ("cancelled",):
                 try:
                     order_list = OrderList.query.filter_by(order_id=order.id).all()
@@ -2630,23 +2705,85 @@ def bulk_update_orders():
                         ol.status = new_status
 
                     if order_list:
-                        dashboard = AffiliateDashboard.query.get(
-                            order_list[0].affiliate_id
-                        )
+                        dashboard = AffiliateDashboard.query.get(order_list[0].affiliate_id)
                         if dashboard:
-                            cancelled_commission = sum(
-                                ol.commission for ol in order_list
-                            )
+                            cancelled_commission = sum(ol.commission for ol in order_list)
                             dashboard.total_revenue -= cancelled_commission
                             dashboard.total_orders -= len(order_list)
                 except Exception as e:
-                    print(
-                        f"[AFFILIATE ERROR] bulk update order_id={order.id} error={str(e)}"
+                    print(f"[AFFILIATE ERROR] bulk update order_id={order.id} error={str(e)}")
+
+            try:
+                if new_status == "delivered" and old_status != "delivered":
+                    already_credited = (
+                        VendorWalletTransaction.query.filter_by(
+                            source="order_earning", reference_id=order.id
+                        ).first()
+                        is not None
                     )
+                    if not already_credited:
+                        vendor_rows = (
+                            db.session.query(
+                                OrderedItems, Products.vendor_id, Vendor.commission_rate
+                            )
+                            .join(Products, Products.id == OrderedItems.product_id)
+                            .join(Vendor, Vendor.id == Products.vendor_id)
+                            .filter(
+                                OrderedItems.order_id == order.id,
+                                Products.vendor_id.isnot(None),
+                            )
+                            .all()
+                        )
+                        vendor_totals = {}
+                        for item, vendor_id, commission_rate in vendor_rows:
+                            net = item.total_price * (1 - commission_rate / 100.0)
+                            vendor_totals[vendor_id] = vendor_totals.get(vendor_id, 0.0) + net
+
+                        for vendor_id, net_amount in vendor_totals.items():
+                            if net_amount > 0:
+                                credit_wallet(
+                                    vendor_id=vendor_id,
+                                    amount=round(net_amount, 2),
+                                    source="order_earning",
+                                    reference_id=order.id,
+                                    note=f"Order #{order.order_id} delivered (bulk update)",
+                                )
+
+                elif new_status == "returned" and old_status != "returned":
+                    already_reversed = (
+                        VendorWalletTransaction.query.filter_by(
+                            source="refund_reversal", reference_id=order.id
+                        ).first()
+                        is not None
+                    )
+                    if not already_reversed:
+                        credit_txns = VendorWalletTransaction.query.filter_by(
+                            source="order_earning", reference_id=order.id
+                        ).all()
+                        vendor_credit_map = {}
+                        for t in credit_txns:
+                            v_id = t.wallet.vendor_id
+                            vendor_credit_map[v_id] = vendor_credit_map.get(v_id, 0.0) + t.amount
+
+                        for vendor_id, credited_amount in vendor_credit_map.items():
+                            try:
+                                debit_wallet(
+                                    vendor_id=vendor_id,
+                                    amount=round(credited_amount, 2),
+                                    source="refund_reversal",
+                                    reference_id=order.id,
+                                    note=f"Order #{order.order_id} returned (bulk update)",
+                                )
+                            except ValueError as balance_err:
+                                print(
+                                    f"[WALLET] Reversal shortfall on order {order.id}, "
+                                    f"vendor {vendor_id}: {balance_err}"
+                                )
+            except Exception as wallet_err:
+                print(f"[WALLET ERROR] bulk update order_id={order.id} error={str(wallet_err)}")
 
         db.session.commit()
 
-        # Shiprocket calls after commit
         if new_status:
             from functions.helper_function import (
                 create_shipment_async,
@@ -2654,25 +2791,19 @@ def bulk_update_orders():
             )
 
             for order in orders:
-                # Create shipment if confirmed and not already created
                 if new_status == "confirmed" and not order.shipment_id:
                     try:
                         create_shipment_async(order.order_id)
                     except Exception as e:
                         print(f"[SHIPROCKET] Create error for {order.order_id}: {e}")
 
-                # Cancel shipment if cancelled
                 if new_status == "cancelled" and order.shiprocket_order_id:
                     try:
                         cancelled = cancel_shiprocket_order(order.shiprocket_order_id)
                         if not cancelled:
-                            print(
-                                f"[SHIPROCKET] Failed to cancel {order.shiprocket_order_id}"
-                            )
+                            print(f"[SHIPROCKET] Failed to cancel {order.shiprocket_order_id}")
                     except Exception as e:
-                        print(
-                            f"[SHIPROCKET] Cancel error for {order.shiprocket_order_id}: {e}"
-                        )
+                        print(f"[SHIPROCKET] Cancel error for {order.shiprocket_order_id}: {e}")
 
         return (
             jsonify(
@@ -3347,8 +3478,6 @@ def get_payment(payment_id):
 
 
 # ─── REFUNDS ──────────────────────────────────────────────────────────────────
-
-
 @adminBP.route("/refunds", methods=["GET"])
 @admin_middleware
 def get_refunds():
@@ -3619,16 +3748,54 @@ def update_refund(refund_id):
 
             if data["status"] == "processed":
                 refund.processed_at = datetime.utcnow()
-                # sync payment refund status
                 payment = Payment.query.get(refund.payment_id)
                 if payment:
                     payment.refund_status = "processed"
                     payment.refund_amount = refund.refund_amount
-                # sync order status
                 order = Orders.query.get(refund.order_id)
                 if order:
+                    old_order_status = order.status
                     order.status = "returned"
                     order.payment_status = "refunded"
+
+                    try:
+                        if old_order_status != "returned":
+                            already_reversed = (
+                                VendorWalletTransaction.query.filter_by(
+                                    source="refund_reversal", reference_id=order.id
+                                ).first()
+                                is not None
+                            )
+                            if not already_reversed:
+                                credit_txns = VendorWalletTransaction.query.filter_by(
+                                    source="order_earning", reference_id=order.id
+                                ).all()
+                                vendor_credit_map = {}
+                                for t in credit_txns:
+                                    v_id = t.wallet.vendor_id
+                                    vendor_credit_map[v_id] = (
+                                        vendor_credit_map.get(v_id, 0.0) + t.amount
+                                    )
+
+                                for vendor_id, credited_amount in vendor_credit_map.items():
+                                    try:
+                                        debit_wallet(
+                                            vendor_id=vendor_id,
+                                            amount=round(credited_amount, 2),
+                                            source="refund_reversal",
+                                            reference_id=order.id,
+                                            note=f"Refund #{refund.id} processed — order #{order.order_id} returned",
+                                        )
+                                    except ValueError as balance_err:
+                                        print(
+                                            f"[WALLET] Reversal shortfall on refund {refund.id}, "
+                                            f"order {order.id}, vendor {vendor_id}: {balance_err}"
+                                        )
+                    except Exception as wallet_err:
+                        print(
+                            f"[WALLET ERROR] refund_id={refund.id} order_id={order.id} "
+                            f"error={str(wallet_err)}"
+                        )
 
             if data["status"] == "rejected":
                 if not data.get("rejection_reason"):
@@ -3665,11 +3832,9 @@ def update_refund(refund_id):
             ),
             500,
         )
-
-
-# ─── STORE SETTINGS ───────────────────────────────────────────────────────────
-
-
+        
+        
+#STORE SETTINGS 
 @adminBP.route("/store", methods=["POST"])
 @admin_middleware
 def create_store():
@@ -5567,7 +5732,6 @@ def reject_vendor_product(product_id):
         )
 
 
-# Vendor payouts
 @adminBP.route("/vendor-payout", methods=["GET"])
 @admin_middleware
 def list_vendor_payouts():
@@ -5649,6 +5813,56 @@ def get_vendor_payout_detail(payout_id):
 
         vendor = Vendor.query.get(payout.vendor_id)
 
+        # --- Wallet snapshot at time of viewing ---
+        wallet = get_or_create_wallet(payout.vendor_id)
+        db.session.commit()  # persist if wallet was just created
+
+        # Money already tied up in OTHER pending requests (exclude this one)
+        other_pending = (
+            db.session.query(db.func.coalesce(db.func.sum(VendorPayout.amount), 0.0))
+            .filter(
+                VendorPayout.vendor_id == payout.vendor_id,
+                VendorPayout.status == "pending",
+                VendorPayout.id != payout.id,
+            )
+            .scalar()
+        )
+
+        requestable_balance = round(wallet.balance - other_pending, 2)
+
+        if payout.status != "pending":
+            is_valid_amount = True
+            flag_reason = None
+        elif payout.amount > wallet.balance:
+            is_valid_amount = False
+            flag_reason = "Requested amount exceeds total wallet balance"
+        elif payout.amount > requestable_balance:
+            is_valid_amount = False
+            flag_reason = "Requested amount exceeds balance after accounting for other pending requests"
+        else:
+            is_valid_amount = True
+            flag_reason = None
+
+        recent_txns = (
+            VendorWalletTransaction.query.filter_by(wallet_id=wallet.id)
+            .order_by(VendorWalletTransaction.created_at.desc())
+            .limit(10)
+            .all()
+        )
+
+        payout_history_counts = {
+            "total": VendorPayout.query.filter_by(vendor_id=payout.vendor_id).count(),
+            "approved": VendorPayout.query.filter_by(
+                vendor_id=payout.vendor_id, status="approved"
+            ).count(),
+            "rejected": VendorPayout.query.filter_by(
+                vendor_id=payout.vendor_id, status="rejected"
+            ).count(),
+            "pending": VendorPayout.query.filter_by(
+                vendor_id=payout.vendor_id, status="pending"
+            ).count(),
+        }
+
         return (
             jsonify(
                 {
@@ -5673,6 +5887,29 @@ def get_vendor_payout_detail(payout_id):
                             if vendor
                             else None
                         ),
+                        "wallet_check": {
+                            "current_balance": wallet.balance,
+                            "total_earned": wallet.total_earned,
+                            "total_withdrawn": wallet.total_withdrawn,
+                            "other_pending_requests": round(other_pending, 2),
+                            "requestable_balance": requestable_balance,
+                            "is_valid_amount": is_valid_amount,
+                            "flag_reason": flag_reason,
+                        },
+                        "vendor_payout_history": payout_history_counts,
+                        "recent_wallet_transactions": [
+                            {
+                                "id": t.id,
+                                "type": t.type,
+                                "source": t.source,
+                                "amount": t.amount,
+                                "balance_after": t.balance_after,
+                                "reference_id": t.reference_id,
+                                "note": t.note,
+                                "created_at": t.created_at,
+                            }
+                            for t in recent_txns
+                        ],
                     },
                 }
             ),
@@ -5712,8 +5949,6 @@ def approve_vendor_payout(payout_id):
                 400,
             )
 
-        # Multipart: admin uploads proof of payment, same as the rest of the app's
-        # file-upload convention via upload_file().
         screenshot_file = request.files.get("payment_screenshot")
         if not screenshot_file:
             return (
@@ -5726,11 +5961,27 @@ def approve_vendor_payout(payout_id):
                 400,
             )
 
+        # Debit wallet BEFORE marking approved — if this fails, nothing else changes.
+        try:
+            txn = debit_wallet(
+                vendor_id=payout.vendor_id,
+                amount=payout.amount,
+                source="payout_withdrawal",
+                reference_id=payout.id,
+                note=f"Payout #{payout.id} approved",
+            )
+        except ValueError as balance_error:
+            return (
+                jsonify({"status": "error", "message": str(balance_error)}),
+                400,
+            )
+
         payout.payment_screenshot = upload_file(
             screenshot_file, folder="vendor_payouts"
         )
         payout.status = "approved"
         payout.note = request.form.get("note", payout.note)
+        payout.wallet_transaction_id = txn.id
         db.session.commit()
 
         return (
@@ -5836,10 +6087,10 @@ def vendor_overview():
             .filter(VendorPayout.status == "pending")
             .scalar()
         )
+        total_wallet_balance = db.session.query(
+            db.func.coalesce(db.func.sum(VendorWallet.balance), 0.0)
+        ).scalar()
 
-        # Revenue grouped per vendor, joined through to Orders so we can
-        # filter on status == "delivered" AND payment_status == "paid" —
-        # previously this query never joined Orders at all.
         revenue_by_vendor = (
             db.session.query(
                 Products.vendor_id,
@@ -5901,6 +6152,7 @@ def vendor_overview():
                             "total_revenue": round(total_revenue, 2),
                             "total_commission_earned": round(total_commission, 2),
                             "vendor_payout_owed": round(vendor_payout_owed, 2),
+                            "total_wallet_balance": round(total_wallet_balance, 2),
                         },
                     },
                 }
@@ -5913,6 +6165,139 @@ def vendor_overview():
                 {
                     "status": "error",
                     "message": "Failed to fetch vendor overview",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor/<int:vendor_id>/wallet", methods=["GET"])
+@admin_middleware
+def get_vendor_wallet_admin(vendor_id):
+    try:
+        vendor = Vendor.query.get(vendor_id)
+        if not vendor:
+            return jsonify({"status": "error", "message": "Vendor not found"}), 404
+
+        wallet = get_or_create_wallet(vendor.id)
+        db.session.commit()
+
+        page = request.args.get("page", 1, type=int)
+        limit = request.args.get("limit", 20, type=int)
+
+        txn_query = VendorWalletTransaction.query.filter_by(
+            wallet_id=wallet.id
+        ).order_by(VendorWalletTransaction.created_at.desc())
+        pagination = txn_query.paginate(page=page, per_page=limit, error_out=False)
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "wallet": {
+                        "balance": wallet.balance,
+                        "total_earned": wallet.total_earned,
+                        "total_withdrawn": wallet.total_withdrawn,
+                        "updated_at": wallet.updated_at,
+                    },
+                    "transactions": [
+                        {
+                            "id": t.id,
+                            "type": t.type,
+                            "source": t.source,
+                            "amount": t.amount,
+                            "balance_after": t.balance_after,
+                            "reference_id": t.reference_id,
+                            "note": t.note,
+                            "created_at": t.created_at,
+                        }
+                        for t in pagination.items
+                    ],
+                    "total": pagination.total,
+                    "pages": pagination.pages,
+                    "page": page,
+                    "limit": limit,
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to fetch wallet",
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
+
+
+@adminBP.route("/vendor/<int:vendor_id>/wallet/adjust", methods=["POST"])
+@admin_middleware
+def adjust_vendor_wallet(vendor_id):
+    try:
+        vendor = Vendor.query.get(vendor_id)
+        if not vendor:
+            return jsonify({"status": "error", "message": "Vendor not found"}), 404
+
+        data = request.get_json()
+        amount = to_float(data.get("amount"))
+        direction = data.get("direction")  # "credit" or "debit"
+        note = data.get("note")
+
+        if not amount or amount <= 0:
+            return jsonify({"status": "error", "message": "Valid amount required"}), 400
+        if direction not in ("credit", "debit"):
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "direction must be 'credit' or 'debit'",
+                    }
+                ),
+                400,
+            )
+        if not note:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "note is required for manual adjustments",
+                    }
+                ),
+                400,
+            )
+
+        try:
+            if direction == "credit":
+                txn = credit_wallet(vendor_id, amount, source="adjustment", note=note)
+            else:
+                txn = debit_wallet(vendor_id, amount, source="adjustment", note=note)
+        except ValueError as balance_error:
+            return jsonify({"status": "error", "message": str(balance_error)}), 400
+
+        db.session.commit()
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": f"Wallet {direction}ed successfully",
+                    "balance_after": txn.balance_after,
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        db.session.rollback()
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Failed to adjust wallet",
                     "error": str(e),
                 }
             ),

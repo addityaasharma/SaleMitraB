@@ -53,6 +53,73 @@ class Vendor(db.Model):
     )
 
 
+class VendorWallet(db.Model):
+    __tablename__ = "vendor_wallet"
+    id = db.Column(db.Integer, primary_key=True)
+    vendor_id = db.Column(
+        db.Integer,
+        db.ForeignKey("vendor.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+    )
+    balance = db.Column(db.Float, nullable=False, default=0.0)  # withdrawable right now
+    total_earned = db.Column(db.Float, nullable=False, default=0.0)  # lifetime credits
+    total_withdrawn = db.Column(
+        db.Float, nullable=False, default=0.0
+    )  # lifetime approved payouts
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+    updated_at = db.Column(
+        db.DateTime,
+        default=db.func.current_timestamp(),
+        onupdate=db.func.current_timestamp(),
+    )
+
+    vendor = db.relationship(
+        "Vendor",
+        backref=db.backref("wallet", uselist=False, cascade="all, delete-orphan"),
+    )
+    transactions = db.relationship(
+        "VendorWalletTransaction",
+        back_populates="wallet",
+        cascade="all, delete-orphan",
+        lazy=True,
+        order_by="VendorWalletTransaction.created_at.desc()",
+    )
+
+
+class VendorWalletTransaction(db.Model):
+    __tablename__ = "vendor_wallet_transaction"
+    id = db.Column(db.Integer, primary_key=True)
+    wallet_id = db.Column(
+        db.Integer,
+        db.ForeignKey("vendor_wallet.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    type = db.Column(
+        db.Enum("credit", "debit", name="vendor_wallet_txn_type"),
+        nullable=False,
+    )
+    source = db.Column(
+        db.Enum(
+            "order_earning",
+            "payout_withdrawal",
+            "refund_reversal",
+            "adjustment",
+            name="vendor_wallet_txn_source",
+        ),
+        nullable=False,
+    )
+    amount = db.Column(db.Float, nullable=False)
+    balance_after = db.Column(db.Float, nullable=False)
+    reference_id = db.Column(
+        db.Integer, nullable=True
+    )  # order_id / payout_id depending on source
+    note = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
+
+    wallet = db.relationship("VendorWallet", back_populates="transactions")
+
+
 class VendorPayout(db.Model):
     __tablename__ = "vendor_payout"
     id = db.Column(db.Integer, primary_key=True)
@@ -67,6 +134,9 @@ class VendorPayout(db.Model):
     )
     payment_screenshot = db.Column(db.String(255), nullable=True)
     note = db.Column(db.String(255), nullable=True)
+    wallet_transaction_id = db.Column(
+        db.Integer, db.ForeignKey("vendor_wallet_transaction.id"), nullable=True
+    )
     created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
     updated_at = db.Column(
         db.DateTime,
@@ -74,6 +144,7 @@ class VendorPayout(db.Model):
         onupdate=db.func.current_timestamp(),
     )
     vendor = db.relationship("Vendor", back_populates="payout_requests")
+    wallet_transaction = db.relationship("VendorWalletTransaction")
 
 
 class Store(db.Model):
