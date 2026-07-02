@@ -9,6 +9,7 @@ import threading
 from functools import wraps
 from datetime import datetime, timezone
 from flask import request, jsonify, g
+from sqlalchemy import func
 from flask import current_app
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
@@ -598,9 +599,11 @@ def _create_shiprocket_shipment(order_id: str):
 
 def create_shipment_async(order_id: str):
     app = current_app._get_current_object()
+
     def run():
         with app.app_context():
             _create_shiprocket_shipment(order_id)
+
     threading.Thread(target=run, daemon=True).start()
 
 

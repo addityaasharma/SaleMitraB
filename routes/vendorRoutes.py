@@ -594,6 +594,98 @@ def get_vendor_product(product_id):
         if product.vendor_id != vendor.id:
             return jsonify({"status": "error", "message": "Not your product"}), 403
 
+        sales_row = (
+            db.session.query(
+                func.count(func.distinct(Orders.id)).label("orders"),
+                func.coalesce(func.sum(OrderedItems.quantity), 0).label("units"),
+                func.coalesce(func.sum(OrderedItems.total_price), 0).label("revenue"),
+                func.count(func.distinct(Orders.user_id)).label("buyers"),
+            )
+            .join(Orders, OrderedItems.order_id == Orders.id)
+            .filter(OrderedItems.product_id == product.id)
+            .filter(Orders.status != "cancelled")
+            .first()
+        )
+        total_orders = sales_row.orders or 0
+
+        cutoff_7d = datetime.utcnow() - timedelta(days=7)
+        current_cart_count = (
+            db.session.query(func.count(func.distinct(Cart.user_id)))
+            .filter(Cart.product_id == product.id)
+            .scalar()
+            or 0
+        )
+        recent_cart_adds = (
+            db.session.query(func.count(func.distinct(Cart.user_id)))
+            .filter(Cart.product_id == product.id, Cart.created_at >= cutoff_7d)
+            .scalar()
+            or 0
+        )
+        total_cart_interest = (
+            db.session.query(func.count(func.distinct(Cart.user_id)))
+            .filter(Cart.product_id == product.id)
+            .scalar()
+            or 0
+        )
+
+        wishlist_count = (
+            db.session.query(func.count(WishList.id))
+            .filter(WishList.product_id == product.id)
+            .scalar()
+            or 0
+        )
+
+        reviews = product.product_reviews
+        avg_rating = (
+            round(sum(r.rating for r in reviews) / len(reviews), 1) if reviews else 0
+        )
+
+        low_stock_threshold = request.args.get("low_stock_threshold", 10, type=int)
+        if product.stock <= 0 and not product.sell_when_out_of_stock:
+            stock_status = "out_of_stock"
+        elif product.stock <= low_stock_threshold:
+            stock_status = "low_stock"
+        else:
+            stock_status = "in_stock"
+
+        conversion_rate = (
+            f"{round((total_orders / total_cart_interest) * 100, 1)}%"
+            if total_cart_interest > 0
+            else None
+        )
+
+        trend_cutoff = datetime.utcnow() - timedelta(days=30)
+        trend_rows = (
+            db.session.query(
+                func.date(Orders.created_at).label("day"),
+                func.coalesce(func.sum(OrderedItems.quantity), 0).label("units"),
+                func.coalesce(func.sum(OrderedItems.total_price), 0).label("revenue"),
+            )
+            .join(Orders, OrderedItems.order_id == Orders.id)
+            .filter(OrderedItems.product_id == product.id)
+            .filter(Orders.status != "cancelled")
+            .filter(Orders.created_at >= trend_cutoff)
+            .group_by(func.date(Orders.created_at))
+            .all()
+        )
+        trend_by_day = {
+            str(row.day): {"units": row.units, "revenue": row.revenue}
+            for row in trend_rows
+        }
+
+        sales_trend = []
+        for i in range(29, -1, -1):
+            day = (datetime.utcnow() - timedelta(days=i)).date()
+            key = str(day)
+            entry = trend_by_day.get(key, {"units": 0, "revenue": 0})
+            sales_trend.append(
+                {
+                    "date": key,
+                    "units": entry["units"],
+                    "revenue": round(entry["revenue"], 2),
+                }
+            )
+
         return (
             jsonify(
                 {
@@ -628,6 +720,21 @@ def get_vendor_product(product_id):
                         "status": product.status,
                         "created_at": product.created_at,
                         "updated_at": product.updated_at,
+                    },
+                    "stats": {
+                        "total_orders": total_orders,
+                        "total_units_sold": sales_row.units or 0,
+                        "total_revenue": round(sales_row.revenue or 0, 2),
+                        "total_buyers": sales_row.buyers or 0,
+                        "avg_rating": avg_rating,
+                        "total_reviews": len(reviews),
+                        "in_cart_count": current_cart_count,
+                        "cart_adds_last_7_days": recent_cart_adds,
+                        "wishlist_count": wishlist_count,
+                        "conversion_rate": conversion_rate,
+                        "stock_status": stock_status,
+                        "current_stock": product.stock,
+                        "sales_trend": sales_trend,
                     },
                 }
             ),

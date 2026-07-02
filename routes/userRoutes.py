@@ -2292,6 +2292,31 @@ def cancel_refund_request(order_id):
 # ─── PRODUCTS ──────────────────────────────────────────────────────────────────
 
 
+class SimplePagination:
+    def __init__(self, items_all, page, per_page):
+        self.total = len(items_all)
+        self.per_page = per_page
+        self.page = page
+        self.pages = max(1, -(-self.total // per_page)) if per_page else 1
+        start = (page - 1) * per_page
+        end = start + per_page
+        self.items = items_all[start:end]
+        self.has_next = page < self.pages
+        self.has_prev = page > 1
+
+
+def _dedupe_by_name(products_in_rank_order):
+    seen_names = set()
+    deduped = []
+    for p in products_in_rank_order:
+        key = (p.name or "").strip().lower()
+        if key in seen_names:
+            continue
+        seen_names.add(key)
+        deduped.append(p)
+    return deduped
+
+
 @userBP.route("/products", methods=["GET"])
 def get_products():
     try:
@@ -2365,57 +2390,85 @@ def get_products():
         sort_order = request.args.get("sort_order", "desc")
 
         if special == "new_arrivals":
-            # newest products — last 30 days
             from datetime import timedelta
 
             cutoff = datetime.utcnow() - timedelta(days=30)
-            query = query.filter(Products.created_at >= cutoff)
-            query = query.order_by(Products.created_at.desc())
+            candidates = (
+                query.filter(Products.created_at >= cutoff)
+                .order_by(Products.created_at.desc())
+                .limit(500)
+                .all()
+            )
+            deduped = _dedupe_by_name(candidates)
+            products = SimplePagination(deduped, page, per_page)
 
         elif special == "trending":
-            # most ordered products in last 7 days
-            from datetime import timedelta
-            from sqlalchemy import func
-
             cutoff = datetime.utcnow() - timedelta(days=7)
-            trending_ids = (
-                db.session.query(OrderedItems.product_id)
-                .join(Orders, OrderedItems.order_id == Orders.id)
-                .filter(Orders.created_at >= cutoff)
-                .filter(Orders.status != "cancelled")
-                .group_by(OrderedItems.product_id)
-                .order_by(func.sum(OrderedItems.quantity).desc())
-                .limit(50)
-                .subquery()
+
+            ranked = (
+                db.session.query(
+                    Cart.product_id,
+                    func.count(func.distinct(Cart.user_id)).label("adds"),
+                )
+                .filter(Cart.created_at >= cutoff)
+                .group_by(Cart.product_id)
+                .order_by(func.count(func.distinct(Cart.user_id)).desc())
+                .limit(300)
+                .all()
             )
-            query = query.filter(
-                Products.id.in_(db.session.query(trending_ids.c.product_id))
-            )
-            # preserve trending order
-            query = query.order_by(Products.created_at.desc())
+
+            if len(ranked) < per_page:
+                already_ranked_ids = {pid for pid, _ in ranked}
+                buyer_ranked = (
+                    db.session.query(
+                        OrderedItems.product_id,
+                        func.count(func.distinct(Orders.user_id)).label("buyers"),
+                    )
+                    .join(Orders, OrderedItems.order_id == Orders.id)
+                    .filter(Orders.created_at >= cutoff)
+                    .filter(Orders.status != "cancelled")
+                    .filter(~OrderedItems.product_id.in_(already_ranked_ids))
+                    .group_by(OrderedItems.product_id)
+                    .order_by(func.count(func.distinct(Orders.user_id)).desc())
+                    .limit(300)
+                    .all()
+                )
+                ranked = ranked + buyer_ranked
+
+            rank_order = [pid for pid, _ in ranked]
+            rank_index = {pid: i for i, pid in enumerate(rank_order)}
+
+            candidates = query.filter(Products.id.in_(rank_order)).all()
+            candidates.sort(key=lambda p: rank_index.get(p.id, len(rank_order)))
+            deduped = _dedupe_by_name(candidates)
+            products = SimplePagination(deduped, page, per_page)
 
         elif special == "best_sellers":
-            # all-time most ordered products
-            from sqlalchemy import func
-
-            best_ids = (
-                db.session.query(OrderedItems.product_id)
+            # All-time, ranked by DISTINCT buyers rather than summed quantity —
+            # one bulk order no longer beats many separate customers.
+            ranked = (
+                db.session.query(
+                    OrderedItems.product_id,
+                    func.count(func.distinct(Orders.user_id)).label("buyers"),
+                )
                 .join(Orders, OrderedItems.order_id == Orders.id)
                 .filter(Orders.status != "cancelled")
                 .group_by(OrderedItems.product_id)
-                .order_by(func.sum(OrderedItems.quantity).desc())
-                .limit(50)
-                .subquery()
+                .order_by(func.count(func.distinct(Orders.user_id)).desc())
+                .limit(300)
+                .all()
             )
-            query = query.filter(
-                Products.id.in_(db.session.query(best_ids.c.product_id))
-            )
-            query = query.order_by(Products.created_at.desc())
+
+            rank_order = [pid for pid, _ in ranked]
+            rank_index = {pid: i for i, pid in enumerate(rank_order)}
+
+            candidates = query.filter(Products.id.in_(rank_order)).all()
+            candidates.sort(key=lambda p: rank_index.get(p.id, len(rank_order)))
+            deduped = _dedupe_by_name(candidates)
+            products = SimplePagination(deduped, page, per_page)
 
         elif special == "top_picks":
-            # highest rated products with at least 1 review
-            from sqlalchemy import func
-
+            # unchanged
             rated_ids = (
                 db.session.query(ProductReview.product_id)
                 .group_by(ProductReview.product_id)
@@ -2428,9 +2481,9 @@ def get_products():
                 Products.id.in_(db.session.query(rated_ids.c.product_id))
             )
             query = query.order_by(Products.created_at.desc())
+            products = query.paginate(page=page, per_page=per_page, error_out=False)
 
         else:
-            # normal sort
             allowed_sort_fields = {
                 "name": Products.name,
                 "price": Products.price,
@@ -2442,8 +2495,7 @@ def get_products():
             query = query.order_by(
                 sort_column.asc() if sort_order == "asc" else sort_column.desc()
             )
-
-        products = query.paginate(page=page, per_page=per_page, error_out=False)
+            products = query.paginate(page=page, per_page=per_page, error_out=False)
 
         products_data = []
         for product in products.items:
@@ -2643,50 +2695,85 @@ def get_related_products(product_id):
         if not product:
             return jsonify({"status": "error", "message": "Product not found"}), 404
 
-        limit = request.args.get("limit", 8, type=int)
+        limit = request.args.get("limit", 16, type=int)
+        same_product_slots = min(4, limit)
 
+        def serialize(p):
+            return {
+                "id": p.id,
+                "name": p.name,
+                "product_image": p.product_image,
+                "price": p.price,
+                "compare_at_price": p.compare_at_price,
+                "discount_percentage": (
+                    f"{round(((p.compare_at_price - p.price) / p.compare_at_price) * 100)}%"
+                    if p.compare_at_price and p.compare_at_price > p.price
+                    else "0%"
+                ),
+                "in_stock": p.stock > 0 or p.sell_when_out_of_stock,
+                "avg_rating": (
+                    round(
+                        sum(r.rating for r in p.product_reviews)
+                        / len(p.product_reviews),
+                        1,
+                    )
+                    if p.product_reviews
+                    else 0
+                ),
+            }
+
+        normalized_name = (product.name or "").strip().lower()
+
+        same_product_matches = Products.query.filter(
+            Products.id != product_id,
+            Products.status == "active",
+            db.func.lower(db.func.trim(Products.name)) == normalized_name,
+            Products.price != product.price,
+        ).all()
+
+        same_product_ids = [p.id for p in same_product_matches]
+        buyer_counts = {}
+        if same_product_ids:
+            rows = (
+                db.session.query(
+                    OrderedItems.product_id,
+                    func.count(func.distinct(Orders.user_id)).label("buyers"),
+                )
+                .join(Orders, OrderedItems.order_id == Orders.id)
+                .filter(OrderedItems.product_id.in_(same_product_ids))
+                .filter(Orders.status != "cancelled")
+                .group_by(OrderedItems.product_id)
+                .all()
+            )
+            buyer_counts = {pid: buyers for pid, buyers in rows}
+
+        same_product_matches.sort(key=lambda p: buyer_counts.get(p.id, 0), reverse=True)
+        same_product_selection = same_product_matches[:same_product_slots]
+        used_ids = [product_id] + [p.id for p in same_product_selection]
+
+        remaining = max(limit - len(same_product_selection), 0)
         related = (
             Products.query.filter(
-                Products.id != product_id,
+                Products.id.notin_(used_ids),
                 Products.status == "active",
                 db.or_(
                     Products.category_id == product.category_id,
                     Products.product_type == product.product_type,
                 ),
             )
-            .limit(limit)
+            .limit(remaining)
             .all()
         )
+
+        data = [serialize(p) for p in same_product_selection] + [
+            serialize(p) for p in related
+        ]
 
         return (
             jsonify(
                 {
                     "status": "success",
-                    "data": [
-                        {
-                            "id": p.id,
-                            "name": p.name,
-                            "product_image": p.product_image,
-                            "price": p.price,
-                            "compare_at_price": p.compare_at_price,
-                            "discount_percentage": (
-                                f"{round(((p.compare_at_price - p.price) / p.compare_at_price) * 100)}%"
-                                if p.compare_at_price and p.compare_at_price > p.price
-                                else "0%"
-                            ),
-                            "in_stock": p.stock > 0 or p.sell_when_out_of_stock,
-                            "avg_rating": (
-                                round(
-                                    sum(r.rating for r in p.product_reviews)
-                                    / len(p.product_reviews),
-                                    1,
-                                )
-                                if p.product_reviews
-                                else 0
-                            ),
-                        }
-                        for p in related
-                    ],
+                    "data": data,
                 }
             ),
             200,
