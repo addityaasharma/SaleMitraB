@@ -5042,6 +5042,7 @@ def get_affiliate(affiliate_id):
         )
 
 
+from functions.helper_function import _build_affiliate_risk_context
 @adminBP.route("/withdrawals", methods=["GET"])
 @admin_middleware
 def get_all_withdrawals():
