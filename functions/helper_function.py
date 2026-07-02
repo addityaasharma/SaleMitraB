@@ -658,3 +658,136 @@ def init_oauth(app):
         ),
         client_kwargs={"scope": "openid email profile"},
     )
+
+
+def _build_affiliate_risk_context(affiliate, requested_amount):
+    """All the per-affiliate context + risk read for one withdrawal request.
+    Cheap enough to call per row at page sizes <=50; if you paginate with
+    many repeat affiliates on one page you could memoize by affiliate.id
+    across the request, but it's not needed at this scale."""
+
+    dashboard = affiliate  # AffiliateDashboard instance
+
+    status_rows = (
+        db.session.query(
+            OrderList.status,
+            func.count(OrderList.id).label("count"),
+            func.coalesce(func.sum(OrderList.commission), 0).label("commission"),
+            func.coalesce(func.sum(OrderList.revenue), 0).label("revenue"),
+        )
+        .filter(OrderList.affiliate_id == dashboard.id)
+        .group_by(OrderList.status)
+        .all()
+    )
+    status_breakdown = {
+        row.status: {
+            "count": row.count,
+            "commission": round(row.commission, 2),
+            "revenue": round(row.revenue, 2),
+        }
+        for row in status_rows
+    }
+    for s in ("pending", "in-transit", "confirmed", "cancelled"):
+        status_breakdown.setdefault(s, {"count": 0, "commission": 0.0, "revenue": 0.0})
+
+    total_order_count = sum(v["count"] for v in status_breakdown.values())
+    cancelled_count = status_breakdown["cancelled"]["count"]
+    cancellation_rate = (
+        round(cancelled_count / total_order_count, 3) if total_order_count else 0
+    )
+    unrealized_commission = round(
+        status_breakdown["pending"]["commission"]
+        + status_breakdown["in-transit"]["commission"],
+        2,
+    )
+
+    product_rows = (
+        db.session.query(
+            OrderList.product_id,
+            Products.name.label("product_name"),
+            func.count(OrderList.id).label("orders"),
+            func.coalesce(func.sum(OrderList.commission), 0).label("commission"),
+            func.coalesce(func.sum(OrderList.revenue), 0).label("revenue"),
+        )
+        .join(Products, Products.id == OrderList.product_id)
+        .filter(OrderList.affiliate_id == dashboard.id)
+        .group_by(OrderList.product_id, Products.name)
+        .order_by(func.sum(OrderList.commission).desc())
+        .limit(10)
+        .all()
+    )
+    product_breakdown = [
+        {
+            "product_id": row.product_id,
+            "product_name": row.product_name,
+            "orders": row.orders,
+            "commission_earned": round(row.commission, 2),
+            "revenue_generated": round(row.revenue, 2),
+        }
+        for row in product_rows
+    ]
+
+    previous_rejected_count = Withdrawal.query.filter_by(
+        affiliate_id=dashboard.id, status="rejected"
+    ).count()
+    previous_approved_count = Withdrawal.query.filter_by(
+        affiliate_id=dashboard.id, status="approved"
+    ).count()
+
+    available_balance = round(dashboard.total_revenue - dashboard.total_withdrawal, 2)
+    amount_vs_balance_pct = (
+        round((requested_amount / available_balance) * 100, 1)
+        if available_balance > 0
+        else None
+    )
+    account_age_days = (datetime.utcnow() - dashboard.created_at).days
+
+    # ── Risk flags — plain-English, admin-facing ──
+    risk_flags = []
+    if cancellation_rate > 0.3:
+        risk_flags.append(
+            f"High cancellation/return rate — {round(cancellation_rate * 100)}% of their orders were cancelled"
+        )
+    if unrealized_commission > 0 and unrealized_commission >= requested_amount * 0.5:
+        risk_flags.append(
+            f"Rs.{unrealized_commission:,.0f} of their balance comes from orders not yet confirmed — "
+            "still at risk of cancellation"
+        )
+    if previous_rejected_count > 0:
+        risk_flags.append(
+            f"{previous_rejected_count} previous withdrawal request(s) from this affiliate were rejected"
+        )
+    if account_age_days < 7:
+        risk_flags.append(f"Affiliate account is only {account_age_days} day(s) old")
+    if amount_vs_balance_pct is not None and amount_vs_balance_pct > 90:
+        risk_flags.append(
+            f"Requesting {amount_vs_balance_pct}% of their entire available balance"
+        )
+
+    if len(risk_flags) >= 3:
+        risk_level = "high"
+    elif len(risk_flags) >= 1:
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    return {
+        "affiliate_extra": {
+            "account_age_days": account_age_days,
+            "total_orders": dashboard.total_orders,
+            "total_revenue": round(dashboard.total_revenue, 2),
+            "total_withdrawal": round(dashboard.total_withdrawal, 2),
+            "available_balance": available_balance,
+        },
+        "product_breakdown": product_breakdown,
+        "order_status_breakdown": status_breakdown,
+        "risk_assessment": {
+            "cancellation_rate": cancellation_rate,
+            "unrealized_commission": unrealized_commission,
+            "amount_vs_available_balance_pct": amount_vs_balance_pct,
+            "previous_rejected_count": previous_rejected_count,
+            "previous_approved_count": previous_approved_count,
+            "risk_flags": risk_flags,
+            "risk_level": risk_level,
+        },
+    }

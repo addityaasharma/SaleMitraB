@@ -5072,21 +5072,28 @@ def get_all_withdrawals():
 
         paginated = query.paginate(page=page, per_page=per_page, error_out=False)
 
-        withdrawals = [
-            {
-                "id": w.id,
-                "affiliate_id": w.affiliate_id,
-                "username": w.affiliate.user.username,
-                "email": w.affiliate.user.email,
-                "upi_id": w.affiliate.upi_id,
-                "amount": w.amount,
-                "payslip": w.payslip,
-                "status": w.status,
-                "created_at": w.created_at,
-                "updated_at": w.updated_at,
-            }
-            for w in paginated.items
-        ]
+        withdrawals = []
+        for w in paginated.items:
+            context = _build_affiliate_risk_context(w.affiliate, w.amount)
+            withdrawals.append(
+                {
+                    "id": w.id,
+                    "affiliate_id": w.affiliate_id,
+                    "username": w.affiliate.user.username,
+                    "email": w.affiliate.user.email,
+                    "upi_id": w.affiliate.upi_id,
+                    "amount": w.amount,
+                    "payslip": w.payslip,
+                    "status": w.status,
+                    "note": w.note,
+                    "created_at": w.created_at,
+                    "updated_at": w.updated_at,
+                    "affiliate": context["affiliate_extra"],
+                    "product_breakdown": context["product_breakdown"],
+                    "order_status_breakdown": context["order_status_breakdown"],
+                    "risk_assessment": context["risk_assessment"],
+                }
+            )
 
         return (
             jsonify(

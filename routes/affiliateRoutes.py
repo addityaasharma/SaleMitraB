@@ -6,6 +6,7 @@ from functions.helper_function import *
 from functions.background_functions import *
 import json, jwt, hashlib, hmac
 from datetime import datetime, timedelta
+from sqlalchemy.orm import joinedload
 
 affiliateBP = Blueprint("affiliate", __name__, url_prefix="/affiliate")
 
@@ -155,7 +156,9 @@ def get_orders():
         sort_by = request.args.get("sort_by", "created_at")
         order = request.args.get("order", "desc")
 
-        query = OrderList.query.filter_by(affiliate_id=dashboard.id)
+        query = OrderList.query.filter_by(affiliate_id=dashboard.id).options(
+            joinedload(OrderList.products)
+        )
 
         if status:
             query = query.filter(OrderList.status == status)
@@ -177,6 +180,8 @@ def get_orders():
                 "id": o.id,
                 "order_id": o.order_id,
                 "product_id": o.product_id,
+                "product_name": o.products.name if o.products else None,
+                "product_image": o.products.product_image if o.products else None,
                 "commission": o.commission,
                 "revenue": o.revenue,
                 "status": o.status,
